@@ -10,7 +10,9 @@ int main() {
 
     celosia::initialize::context();
 
-    if (!celosia::platform::create("Celosia UI", ImVec2(0, 0), celosia::ui::size))
+    celosia::variables::title = { "Fen", "rir" };
+    celosia::ui::size = { 1040, 680 }; // at scale 1, room for the results list's columns
+    if (!celosia::platform::create("Fenrir", ImVec2(0, 0), celosia::ui::size))
         return 1;
     celosia::initialize::fonts(); // at the scale create() picked for the monitor
     celosia::initialize::images();

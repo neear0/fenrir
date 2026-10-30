@@ -120,6 +120,13 @@ set(celos_ui_sources
     ui/widgets/functions/render_frame_animated.cpp
     ui/widgets/functions/render_frame_border_animated.cpp
     ui/widgets/functions/render_frame_border_color.cpp
+    ui/widgets/virtual_list.cpp
+    ui/render/screens/home.cpp
+    ui/render/screens/recover.cpp
+    ui/render/screens/images.cpp
+    ui/render/screens/erase.cpp
+    ui/render/screens/reports.cpp
+    ui/render/screens/settings.cpp
 )
 
 if(CELOSUI_PLATFORM STREQUAL "win32")
@@ -252,6 +259,8 @@ if(MSVC)
     target_compile_options(celos_ui PRIVATE /MP)
     # imported dlls are only looked up in system32, never next to the executable
     target_link_options(celos_ui PRIVATE $<$<NOT:$<CONFIG:Debug>>:/DEPENDENTLOADFLAG:0x800>)
+    # no console window next to the app outside of debug builds, which keep it for the d3d11 debug layer's messages
+    target_link_options(celos_ui PRIVATE $<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup>)
 endif()
 
 if(FENRIR_BUILD_TESTS)

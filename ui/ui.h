@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>

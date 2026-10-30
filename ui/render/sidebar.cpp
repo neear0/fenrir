@@ -1,4 +1,5 @@
 #include "../ui.h"
+#include "screens/screens.h"
 
 void celosia::render::sidebar() {
 	ImDrawList* drawlist_window = core::drawlist();
@@ -6,7 +7,8 @@ void celosia::render::sidebar() {
 	core::set_cursor(ImVec2(style::general::padding.x, style::titlebar::height));
 	scroll_area::begin("Sidebar", ImVec2(style::sidebar::width - style::general::padding.x, ui::size.y - style::titlebar::height));
 	
-	render::tabs({ "Widgets", "Appearance" });
+	const auto& pages = fenrir::screens::tabs;
+	render::tabs({ pages[0], pages[1], pages[2], pages[3], pages[4], pages[5] });
 
 	scroll_area::end();
 }

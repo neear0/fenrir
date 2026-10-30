@@ -17,6 +17,12 @@ namespace celosia::widgets {
 	bool toggle(const char* label, bool* v); // an on/off switch, true when it was flipped
 	void text(const char* text); // a line of text as an item
 
+	// count rows of row_height in a scroll area of size, only the ones that can be seen are drawn, by draw_row(index, rect,
+	// selected, hovered) into core::drawlist(). it's one item for the keyboard: up and down move the selection, home and end
+	// go to the ends. selected is -1 when there's none, true when the selection changed
+	using t_draw_row = std::function<void(int index, const ImRect& rect, bool selected, bool hovered)>;
+	bool virtual_list(const char* label, ImVec2 size, int count, float row_height, int* selected, const t_draw_row& draw_row);
+
 	// drawing
 	void add_rect_filled_half_rounded(ImDrawList* drawlist, const ImVec2& min, const ImVec2& max, const ImColor& clr, float rounding);
 
