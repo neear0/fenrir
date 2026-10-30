@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(celos_ui LANGUAGES C CXX)
+# fenrir: the CelosUI fork (neear0/celosUI, pinned in THIRD_PARTY_NOTICES.md) with the storage engine added to it.
+# the ui keeps CelosUI's celos_ui target, it builds as fenrir.exe
+project(fenrir VERSION 0.0.1 LANGUAGES C CXX)
+option(FENRIR_BUILD_TESTS "Build storage_tests and register the CTest tests" ON)
 
 # win32: Win32 window + D3D11, keeps the acrylic blur (windows only)
 # glfw:  GLFW window + Vulkan, used on linux and also builds on windows
@@ -42,6 +45,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=3>")
     add_link_options(-Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 endif()
+
+# storage_core and fenrir-cli, see cmake/storage.cmake
+include(cmake/storage.cmake)
 
 # freetype rasterizes the fonts (IMGUI_ENABLE_FREETYPE in imconfig.h). it's downloaded and only the modules CelosUI uses are
 # compiled, the same list as cUI.vcxproj. external/freetype_config/ holds the ftmodule.h that registers them
@@ -181,7 +187,9 @@ else()
 endif()
 
 add_executable(celos_ui ${celos_ui_sources} ${imgui_sources} ${backend_sources})
-target_link_libraries(celos_ui PRIVATE celos_freetype)
+target_link_libraries(celos_ui PRIVATE celos_freetype storage_core)
+set_target_properties(celos_ui PROPERTIES OUTPUT_NAME fenrir)
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT celos_ui) # what F5 runs in the generated solution
 
 # ui/pch.h is force-included into our sources (the vcxproj does the same), ImGui, the backends and the font data build without it
 target_precompile_headers(celos_ui PRIVATE ui/pch.h)
@@ -244,4 +252,9 @@ if(MSVC)
     target_compile_options(celos_ui PRIVATE /MP)
     # imported dlls are only looked up in system32, never next to the executable
     target_link_options(celos_ui PRIVATE $<$<NOT:$<CONFIG:Debug>>:/DEPENDENTLOADFLAG:0x800>)
+endif()
+
+if(FENRIR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
