@@ -1,0 +1,22 @@
+name: windows
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      # the newest visual studio on the runner, not the vs2022 preset, so a runner image update doesn't break it
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DCELOSUI_PLATFORM=win32
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure

@@ -370,3 +370,11 @@ CMakeUserPresets.json
 
 # dependencies the vcxproj downloads (freetype)
 .deps/
+
+# planning notes, kept local
+/MASTER_DEVELOPMENT_PROMPT.md
+/DEVELOPMENT_PLAN.md
+/CELOSUI_INTEGRATION.md
+# the vs rules above take any debug/ or win32/ folder for build output, these two are source
+!/ui/debug/
+!/ui/win32/
