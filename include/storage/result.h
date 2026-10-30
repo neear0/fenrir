@@ -18,6 +18,7 @@ namespace storage {
 		io_error,
 		out_of_memory,
 		cancelled,    // the job's CancellationToken was set
+		no_space,     // the destination doesn't have room for it
 	};
 
 	std::string_view to_string(Errc code) noexcept;

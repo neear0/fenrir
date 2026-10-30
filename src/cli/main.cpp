@@ -20,6 +20,8 @@
 #include <string_view>
 #include <vector>
 
+#include "storage/exporter.h"
+#include "storage/fat32.h"
 #include "storage/file_image_source.h"
 #include "storage/hash.h"
 #include "storage/hex_dump.h"
@@ -37,6 +39,13 @@ namespace {
 			"  partitions <image> [--sector-size N] list its partition table (MBR or GPT) and anything wrong with it\n"
 			"  hex <image> [offset] [length]        show bytes from it, 512 from offset 0 unless told (0x for hex)\n"
 			"  hash <image>                         its SHA-256\n"
+			"  files <image> [--partition N] [--all] [--why]\n"
+			"                                       the deleted files on a FAT32 volume, how recoverable each one is\n"
+			"                                       and (--why) what that's based on. --all lists the live ones too\n"
+			"  recover <image> <dir> [--partition N] [--id N]...\n"
+			"                                       copy deleted files out to dir: all that can be, or the ids given.\n"
+			"                                       nothing in dir is ever replaced. dir shouldn't be on the drive\n"
+			"                                       the image came from, if that drive is the one being recovered\n"
 			"  --version                            print the version\n");
 	}
 
@@ -237,6 +246,181 @@ namespace {
 		return 0;
 	}
 
+	// the fat32 volume in an image: the partition asked for, else the first one that looks like fat32, else the whole
+	// image when it has no partition table. nothing, with the reason printed, when there isn't one
+	struct t_volume {
+		std::unique_ptr<storage::PartitionView> partition; // null: the whole image is the volume
+		storage::IBlockSource* source = nullptr;
+		std::string where;
+	};
+
+	std::optional<t_volume> fat32_volume(storage::FileImageSource& image, std::optional<std::uint64_t> number) {
+		auto map = storage::scan_partitions(image);
+		if (!map) {
+			print_error(map.error());
+			return std::nullopt;
+		}
+		t_volume volume;
+		const storage::Partition* chosen = nullptr;
+		for (const storage::Partition& p : map->partitions)
+			if (number ? p.number == *number : p.filesystem == storage::FileSystem::fat32) {
+				chosen = &p;
+				break;
+			}
+		if (chosen) {
+			auto view = storage::open_partition(image, *chosen);
+			if (!view) {
+				print_error(view.error());
+				return std::nullopt;
+			}
+			volume.partition = std::move(*view);
+			volume.source = volume.partition.get();
+			volume.where = std::format("partition {}", chosen->number);
+		} else if (!number && map->partitions.empty()) {
+			volume.source = &image;
+			volume.where = "the whole image";
+		} else {
+			if (number)
+				std::println(stderr, "error: there's no partition {}, `fenrir-cli partitions` lists them", *number);
+			else
+				std::println(stderr, "error: no partition looks like FAT32, pick one with --partition N");
+			return std::nullopt;
+		}
+		return volume;
+	}
+
+	std::optional<storage::Fat32Scan> scan_volume(t_volume& volume) {
+		auto scanned = storage::scan_fat32(*volume.source);
+		if (!scanned) {
+			print_error(scanned.error());
+			return std::nullopt;
+		}
+		const storage::Fat32Volume& v = scanned->volume;
+		std::print("volume:  {}, FAT32, {} byte clusters, {} clusters ({} free)", volume.where, v.cluster_size, v.cluster_count, v.free_clusters);
+		if (!v.label.empty())
+			std::print(", label {}", v.label);
+		std::println("");
+		return std::move(*scanned);
+	}
+
+	void print_diagnostics(const std::vector<storage::Diagnostic>& diagnostics) {
+		if (diagnostics.empty())
+			return;
+		std::println("");
+		std::println("notes:");
+		for (const storage::Diagnostic& d : diagnostics)
+			std::println("  {}: {}", storage::to_string(d.severity), d.message);
+	}
+
+	int files(const std::filesystem::path& path, std::optional<std::uint64_t> partition, bool all, bool why) {
+		auto image = open(path);
+		if (!image)
+			return 1;
+		auto volume = fat32_volume(*image, partition);
+		if (!volume)
+			return 1;
+		auto scan = scan_volume(*volume);
+		if (!scan)
+			return 1;
+
+		std::uint64_t deleted = 0;
+		std::println("");
+		std::println("    id  status                size  deleted  path");
+		for (const storage::RecoveryCandidate& c : scan->candidates) {
+			deleted += c.deleted;
+			if (!all && !c.deleted)
+				continue;
+			const std::string size = c.directory ? "<dir>" : std::format("{}", c.size);
+			std::println("  {:>4}  {:<13} {:>12}  {:<7}  {}", c.id, storage::to_string(c.integrity), size, c.deleted ? "deleted" : "", c.path);
+			if (why)
+				for (const std::string& reason : c.reasons)
+					std::println("        - {}", reason);
+		}
+		std::println("");
+		std::println("{} entries, {} deleted{}", scan->candidates.size(), deleted, all ? "" : " (those are listed, --all lists everything)");
+		print_diagnostics(scan->diagnostics);
+		return 0;
+	}
+
+	int recover(const std::filesystem::path& path, const std::filesystem::path& destination, std::optional<std::uint64_t> partition, const std::vector<std::uint64_t>& ids) {
+		auto image = open(path);
+		if (!image)
+			return 1;
+		auto volume = fat32_volume(*image, partition);
+		if (!volume)
+			return 1;
+		auto scan = scan_volume(*volume);
+		if (!scan)
+			return 1;
+
+		std::vector<const storage::RecoveryCandidate*> chosen;
+		if (ids.empty()) {
+			for (const storage::RecoveryCandidate& c : scan->candidates)
+				if (c.deleted && !c.directory && c.integrity != storage::Integrity::unrecoverable)
+					chosen.push_back(&c);
+		} else {
+			for (std::uint64_t id : ids) {
+				if (id >= scan->candidates.size()) {
+					std::println(stderr, "error: there's no entry {}, `fenrir-cli files` lists them", id);
+					return 2;
+				}
+				chosen.push_back(&scan->candidates[static_cast<std::size_t>(id)]);
+			}
+		}
+
+		std::println("to:      {}", utf8(destination.u8string()));
+		std::println("");
+		std::uint64_t written = 0, bytes = 0, failed = 0;
+		for (const storage::RecoveryCandidate* c : chosen) {
+			auto exported = storage::export_candidate(*volume->source, *c, destination);
+			if (!exported) {
+				failed++;
+				std::println("  {:>4}  not written ({}: {})  {}", c->id, exported.error().context, storage::to_string(exported.error().code), c->path);
+				continue;
+			}
+			written++;
+			bytes += exported->bytes;
+			std::println("  {:>4}  {:<13} {}  {}", c->id, storage::to_string(c->integrity), storage::to_hex(exported->sha256), utf8(exported->path.u8string()));
+		}
+		std::println("");
+		std::println("{} written ({} bytes), {} not. the SHA-256 is of what was written: check anything that isn't intact before trusting it", written, bytes, failed);
+		return failed == 0 ? 0 : 1;
+	}
+
+	struct t_args {
+		std::vector<std::filesystem::path> positional;
+		std::optional<std::uint64_t> partition, sector_size;
+		std::vector<std::uint64_t> ids;
+		bool all = false, why = false, bad = false;
+	};
+
+	t_args parse(const std::vector<std::filesystem::path>& args) {
+		t_args out;
+		for (std::size_t i = 1; i < args.size(); i++) {
+			const std::filesystem::path& a = args[i];
+			if (a == "--partition" || a == "--sector-size" || a == "--id") {
+				const std::optional<std::uint64_t> v = i + 1 < args.size() ? number(args[++i]) : std::nullopt;
+				if (!v)
+					out.bad = true;
+				else if (a == "--partition")
+					out.partition = v;
+				else if (a == "--sector-size")
+					out.sector_size = v;
+				else
+					out.ids.push_back(*v);
+			} else if (a == "--all") {
+				out.all = true;
+			} else if (a == "--why") {
+				out.why = true;
+			} else if (a.native().starts_with(std::filesystem::path("--").native())) {
+				out.bad = true;
+			} else {
+				out.positional.push_back(a);
+			}
+		}
+		return out;
+	}
+
 	int run(const std::vector<std::filesystem::path>& args) {
 		if (args.empty()) {
 			usage();
@@ -251,29 +435,28 @@ namespace {
 			usage();
 			return 0;
 		}
-		if (command == "info" && args.size() == 2)
-			return info(args[1]);
-		if (command == "hash" && args.size() == 2)
-			return hash(args[1]);
-		if (command == "partitions" && args.size() == 2)
-			return partitions(args[1], 0);
-		if (command == "partitions" && args.size() == 4 && args[2] == "--sector-size") {
-			const auto size = number(args[3]);
-			if (!size || *size > 65536) {
-				usage();
-				return 2;
-			}
-			return partitions(args[1], static_cast<std::uint32_t>(*size));
+		const t_args a = parse(args);
+		const std::size_t n = a.positional.size();
+		if (a.bad) {
+			usage();
+			return 2;
 		}
-		if (command == "hex" && args.size() >= 2 && args.size() <= 4) {
-			const auto offset = args.size() >= 3 ? number(args[2]) : std::optional<std::uint64_t>(0);
-			const auto length = args.size() >= 4 ? number(args[3]) : std::optional<std::uint64_t>(512);
-			if (!offset || !length) {
-				usage();
-				return 2;
-			}
-			return hex(args[1], *offset, *length);
+		if (command == "info" && n == 1)
+			return info(a.positional[0]);
+		if (command == "hash" && n == 1)
+			return hash(a.positional[0]);
+		if (command == "partitions" && n == 1 && a.sector_size.value_or(0) <= 65536)
+			return partitions(a.positional[0], static_cast<std::uint32_t>(a.sector_size.value_or(0)));
+		if (command == "hex" && n >= 1 && n <= 3) {
+			const auto offset = n >= 2 ? number(a.positional[1]) : std::optional<std::uint64_t>(0);
+			const auto length = n >= 3 ? number(a.positional[2]) : std::optional<std::uint64_t>(512);
+			if (offset && length)
+				return hex(a.positional[0], *offset, *length);
 		}
+		if (command == "files" && n == 1)
+			return files(a.positional[0], a.partition, a.all, a.why);
+		if (command == "recover" && n == 2)
+			return recover(a.positional[0], a.positional[1], a.partition, a.ids);
 		usage();
 		return 2;
 	}

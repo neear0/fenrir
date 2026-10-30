@@ -99,7 +99,7 @@ std::string_view storage::to_string(Diagnostic::Severity severity) noexcept {
 	return "?";
 }
 
-bool storage::PartitionMap::has(Diagnostic::Severity severity) const noexcept {
+bool storage::has(const std::vector<Diagnostic>& diagnostics, Diagnostic::Severity severity) noexcept {
 	for (const Diagnostic& diagnostic : diagnostics)
 		if (diagnostic.severity == severity)
 			return true;

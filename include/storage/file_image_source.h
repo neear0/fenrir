@@ -11,6 +11,10 @@ namespace storage {
 	// that way makes open() fail with busy, so the image can't change under a scan. posix has no such lock, a file that
 	// shrinks while it's read gives io_error.
 	// device paths (\\.\PhysicalDrive0, \\?\Volume{...}) are refused with unsupported, those are for a separate device source
+	// a path that reaches a device or a volume rather than a file: \\.\..., \\?\ other than \\?\C:\ and \\?\UNC\, \??\...
+	// on windows, /dev, /proc and /sys elsewhere
+	bool is_device_path(const std::filesystem::path& path) noexcept;
+
 	class FileImageSource final : public IBlockSource {
 	public:
 		static Result<std::unique_ptr<FileImageSource>> open(const std::filesystem::path& path) noexcept;

@@ -49,6 +49,6 @@ TEST_CASE("errors chain through and_then and transform") {
 }
 
 TEST_CASE("every error code has a name") {
-	for (int code = 0; code <= static_cast<int>(Errc::cancelled); code++)
+	for (int code = 0; code <= static_cast<int>(Errc::no_space); code++)
 		CHECK(storage::to_string(static_cast<Errc>(code)) != "unknown error");
 }

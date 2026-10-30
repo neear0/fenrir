@@ -12,6 +12,7 @@ std::string_view storage::to_string(Errc code) noexcept {
 	case Errc::io_error: return "i/o error";
 	case Errc::out_of_memory: return "out of memory";
 	case Errc::cancelled: return "cancelled";
+	case Errc::no_space: return "not enough free space";
 	}
 	return "unknown error";
 }

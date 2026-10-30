@@ -22,6 +22,10 @@ add_library(storage_core STATIC
     include/storage/memory_source.h
     include/storage/fault_injecting_source.h
     include/storage/partition.h
+    include/storage/diagnostic.h
+    include/storage/recovery_candidate.h
+    include/storage/fat32.h
+    include/storage/exporter.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -29,6 +33,8 @@ add_library(storage_core STATIC
     src/io/fault_injecting_source.cpp
     src/partition/partition.cpp
     src/partition/scan.cpp
+    src/fs/fat32/scan.cpp
+    src/export/exporter.cpp
 )
 if(WIN32)
     target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp)

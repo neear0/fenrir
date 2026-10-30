@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "block_source.h"
+#include "diagnostic.h"
 
 // partition tables (mbr with extended partitions, gpt) read from a disk or disk image, checked against everything that
 // can be checked: signatures, crcs, the backup gpt, boundaries, overlaps. nothing here writes, and a table that's
@@ -68,17 +69,6 @@ namespace storage {
 		FileSystem filesystem = FileSystem::unknown;
 	};
 
-	struct Diagnostic {
-		enum class Severity : std::uint8_t {
-			info,    // worth knowing, nothing's wrong: e.g. a hybrid mbr
-			warning, // something's damaged or odd, what's in the map is still usable
-			error,   // something's damaged enough that part of the map is missing or can't be trusted
-		};
-		Severity severity;
-		std::string message; // numbers and offsets only, never anything read from a filesystem
-	};
-	std::string_view to_string(Diagnostic::Severity severity) noexcept;
-
 	struct PartitionMap {
 		PartitionScheme scheme = PartitionScheme::none;
 		std::uint32_t sector_size = 512;
@@ -94,7 +84,7 @@ namespace storage {
 		std::vector<Partition> partitions; // in the order the table lists them
 		std::vector<Diagnostic> diagnostics;
 
-		bool has(Diagnostic::Severity severity) const noexcept;
+		bool has(Diagnostic::Severity severity) const noexcept { return storage::has(diagnostics, severity); }
 	};
 
 	struct PartitionScanOptions {

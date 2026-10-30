@@ -88,3 +88,9 @@ storage::Result<std::size_t> storage::FileImageSource::read_at(std::uint64_t off
 	}
 	return done;
 }
+
+bool storage::is_device_path(const std::filesystem::path& path) noexcept {
+	// the image source checks the file type after opening, this is for paths that aren't opened, like a destination
+	const std::string& p = path.native();
+	return p.starts_with("/dev/") || p.starts_with("/proc/") || p.starts_with("/sys/");
+}

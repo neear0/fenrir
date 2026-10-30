@@ -127,3 +127,7 @@ storage::Result<std::size_t> storage::FileImageSource::read_at(std::uint64_t off
 	}
 	return done;
 }
+
+bool storage::is_device_path(const std::filesystem::path& path) noexcept {
+	return device_path(path.native());
+}
