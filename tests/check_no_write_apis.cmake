@@ -1,6 +1,7 @@
 # fails when the storage engine or the cli uses an api that can write to a file or a device. until the reviewed write paths
 # exist (exports to a separate drive, erasure of disposable image files), nothing in src/ or include/ may write anywhere.
 # the ui (ui/, ImGui) isn't scanned: it never touches storage, it only talks to storage_core.
+# tools/ isn't either: the fixture generator writes test images, into the build directory ctest gives it.
 # usage: cmake -DROOT=<source dir> -P check_no_write_apis.cmake
 if(NOT ROOT)
     message(FATAL_ERROR "pass -DROOT=<source dir>")

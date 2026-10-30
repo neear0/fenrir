@@ -14,9 +14,21 @@ endfunction()
 add_library(storage_core STATIC
     include/storage/result.h
     include/storage/block_source.h
+    include/storage/bytes.h
+    include/storage/jobs.h
+    include/storage/hash.h
+    include/storage/hex_dump.h
     include/storage/file_image_source.h
+    include/storage/memory_source.h
+    include/storage/fault_injecting_source.h
+    include/storage/partition.h
     src/core/error.cpp
+    src/core/hash.cpp
+    src/core/hex_dump.cpp
     src/io/block_source.cpp
+    src/io/fault_injecting_source.cpp
+    src/partition/partition.cpp
+    src/partition/scan.cpp
 )
 if(WIN32)
     target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp)
