@@ -19,11 +19,12 @@ namespace storage {
 		// fixed for as long as the source is open
 		virtual std::uint64_t size_bytes() const noexcept = 0;
 
-		// reads up to output.size() bytes from offset and says how many it read: all of them, fewer only where the source
-		// ends, 0 at offset == size_bytes(). an offset past the end is out_of_range
+		// reads up to output.size() bytes from offset and says how many it read. that can be fewer than asked anywhere
+		// (a device reading in chunks, FaultInjectingSource), but it's never 0 before the end: 0 means offset ==
+		// size_bytes() or an empty output. an offset past the end is out_of_range
 		virtual Result<std::size_t> read_at(std::uint64_t offset, std::span<std::byte> output) noexcept = 0;
 	};
 
-	// read_at() for exactly output.size() bytes, out_of_range when the source ends before that
+	// read_at() until exactly output.size() bytes are read, out_of_range when the source ends before that
 	Result<void> read_exact(IBlockSource& source, std::uint64_t offset, std::span<std::byte> output) noexcept;
 }

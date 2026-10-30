@@ -15,7 +15,7 @@ set(CELOSUI_PLATFORM ${celos_ui_default_platform} CACHE STRING "Window and rende
 set_property(CACHE CELOSUI_PLATFORM PROPERTY STRINGS win32 glfw)
 option(CELOSUI_WAYLAND "Build GLFW with native Wayland support (needs the wayland dev packages), X11 is used when both are available" OFF)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)

@@ -11,6 +11,7 @@ std::string_view storage::to_string(Errc code) noexcept {
 	case Errc::overflow: return "offset overflow";
 	case Errc::io_error: return "i/o error";
 	case Errc::out_of_memory: return "out of memory";
+	case Errc::cancelled: return "cancelled";
 	}
 	return "unknown error";
 }

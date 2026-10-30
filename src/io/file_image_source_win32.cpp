@@ -30,24 +30,24 @@ namespace {
 		return !drive && !unc;
 	}
 
-	storage::Error from_os(DWORD error, const char* context) {
+	std::unexpected<storage::Error> from_os(DWORD error, const char* context) {
 		using storage::Errc;
 		switch (error) {
 		case ERROR_FILE_NOT_FOUND:
 		case ERROR_PATH_NOT_FOUND:
 		case ERROR_INVALID_NAME:
 		case ERROR_BAD_NETPATH:
-			return { Errc::not_found, context, error };
+			return storage::fail(Errc::not_found, context, error);
 		case ERROR_ACCESS_DENIED:
-			return { Errc::access_denied, context, error };
+			return storage::fail(Errc::access_denied, context, error);
 		case ERROR_SHARING_VIOLATION:
 		case ERROR_LOCK_VIOLATION:
-			return { Errc::busy, context, error };
+			return storage::fail(Errc::busy, context, error);
 		case ERROR_NOT_ENOUGH_MEMORY:
 		case ERROR_OUTOFMEMORY:
-			return { Errc::out_of_memory, context, error };
+			return storage::fail(Errc::out_of_memory, context, error);
 		default:
-			return { Errc::io_error, context, error };
+			return storage::fail(Errc::io_error, context, error);
 		}
 	}
 
@@ -61,9 +61,9 @@ namespace {
 storage::Result<std::unique_ptr<storage::FileImageSource>> storage::FileImageSource::open(const std::filesystem::path& path) noexcept {
 	const std::wstring& native = path.native();
 	if (native.empty())
-		return Error{ Errc::invalid_argument, "opening an image: the path is empty" };
+		return fail(Errc::invalid_argument, "opening an image: the path is empty");
 	if (device_path(native))
-		return Error{ Errc::unsupported, "opening an image: device paths aren't opened as image files" };
+		return fail(Errc::unsupported, "opening an image: device paths aren't opened as image files");
 
 	// read access only. sharing read only: nobody can open it for writing while it's open here, and if someone already has,
 	// this fails with a sharing violation instead of reading an image that's changing
@@ -72,24 +72,24 @@ storage::Result<std::unique_ptr<storage::FileImageSource>> storage::FileImageSou
 		const DWORD error = GetLastError();
 		const DWORD attributes = error == ERROR_ACCESS_DENIED ? GetFileAttributesW(native.c_str()) : INVALID_FILE_ATTRIBUTES;
 		if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY))
-			return Error{ Errc::unsupported, "opening an image: it's a directory", error };
+			return fail(Errc::unsupported, "opening an image: it's a directory", error);
 		return from_os(error, "opening an image");
 	}
 
 	if (GetFileType(handle.value) != FILE_TYPE_DISK) // consoles, pipes and the like
-		return Error{ Errc::unsupported, "opening an image: not a file" };
+		return fail(Errc::unsupported, "opening an image: not a file");
 	BY_HANDLE_FILE_INFORMATION info{};
 	if (!GetFileInformationByHandle(handle.value, &info))
 		return from_os(GetLastError(), "opening an image: reading its attributes");
 	if (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE))
-		return Error{ Errc::unsupported, "opening an image: not a regular file" };
+		return fail(Errc::unsupported, "opening an image: not a regular file");
 	LARGE_INTEGER size{};
 	if (!GetFileSizeEx(handle.value, &size) || size.QuadPart < 0)
 		return from_os(GetLastError(), "opening an image: reading its size");
 
 	std::unique_ptr<FileImageSource> source(new (std::nothrow) FileImageSource());
 	if (!source)
-		return Error{ Errc::out_of_memory, "opening an image" };
+		return fail(Errc::out_of_memory, "opening an image");
 	source->size_ = static_cast<std::uint64_t>(size.QuadPart);
 	source->handle_ = handle.release();
 	return source;
@@ -104,7 +104,7 @@ std::uint64_t storage::FileImageSource::size_bytes() const noexcept { return siz
 
 storage::Result<std::size_t> storage::FileImageSource::read_at(std::uint64_t offset, std::span<std::byte> output) noexcept {
 	if (offset > size_)
-		return Error{ Errc::out_of_range, "reading the image: the offset is past its end" };
+		return fail(Errc::out_of_range, "reading the image: the offset is past its end");
 	const std::size_t want = static_cast<std::size_t>(std::min<std::uint64_t>(output.size(), size_ - offset));
 
 	std::size_t done = 0;
@@ -118,11 +118,11 @@ storage::Result<std::size_t> storage::FileImageSource::read_at(std::uint64_t off
 		if (!ReadFile(handle_, output.data() + done, chunk, &got, &position)) {
 			const DWORD error = GetLastError();
 			if (error == ERROR_HANDLE_EOF)
-				return Error{ Errc::io_error, "reading the image: it's shorter than when it was opened", error };
+				return fail(Errc::io_error, "reading the image: it's shorter than when it was opened", error);
 			return from_os(error, "reading the image");
 		}
 		if (got == 0)
-			return Error{ Errc::io_error, "reading the image: it's shorter than when it was opened" };
+			return fail(Errc::io_error, "reading the image: it's shorter than when it was opened");
 		done += got;
 	}
 	return done;

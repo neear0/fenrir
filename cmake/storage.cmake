@@ -10,7 +10,7 @@ function(fenrir_warnings target)
     endif()
 endfunction()
 
-# storage_core: recovery and (later) erasure, plain c++20. nothing in it may include CelosUI, ImGui or graphics headers
+# storage_core: recovery and (later) erasure, plain c++23. nothing in it may include CelosUI, ImGui or graphics headers
 add_library(storage_core STATIC
     include/storage/result.h
     include/storage/block_source.h
@@ -25,7 +25,7 @@ else()
     target_compile_definitions(storage_core PUBLIC _FILE_OFFSET_BITS=64)
 endif()
 target_include_directories(storage_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_features(storage_core PUBLIC cxx_std_20)
+target_compile_features(storage_core PUBLIC cxx_std_23)
 fenrir_warnings(storage_core)
 
 # fenrir-cli: read-only debug and test commands
