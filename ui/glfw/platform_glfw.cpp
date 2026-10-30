@@ -251,6 +251,14 @@ void celosia::platform::bring_to_top() {
     // GLFW_FLOATING already keeps the window above others, raising it every frame would steal focus
 }
 
+void celosia::platform::minimize() {
+    glfwIconifyWindow(glfw_window);
+}
+
+void celosia::platform::close() {
+    glfwSetWindowShouldClose(glfw_window, GLFW_TRUE);
+}
+
 bool celosia::platform::blur_supported() { // only known after create(), the compositor is asked once
     return blur;
 }

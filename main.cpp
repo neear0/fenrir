@@ -11,10 +11,17 @@ int main() {
     celosia::initialize::context();
 
     celosia::variables::title = { "Fen", "rir" };
-    celosia::ui::size = { 1040, 680 }; // at scale 1, room for the results list's columns
+    celosia::ui::size = { 1100, 700 }; // at scale 1, room for the sidebar and the results list's columns
+    celosia::style::sidebar::width = 248;
+    celosia::style::titlebar::height = 52;
     if (!celosia::platform::create("Fenrir", ImVec2(0, 0), celosia::ui::size))
         return 1;
     celosia::initialize::fonts(); // at the scale create() picked for the monitor
+    { // fenrir's own sizes: captions and badges, and the spaced out headings
+        using namespace celosia::resources;
+        fonts::add("small", { font_data::poppins_regular, font_data::poppins_regular_size, 12.f });
+        fonts::add("caps", { font_data::poppins_bold, font_data::poppins_bold_size, 10.5f });
+    }
     celosia::initialize::images();
 
     while (celosia::platform::poll())

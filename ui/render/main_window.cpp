@@ -1,7 +1,7 @@
 #include "../ui.h"
 #include "screens/screens.h"
 
-// fenrir's window: the background, titlebar and sidebar from CelosUI's demo, and the open tab's page from screens/
+// fenrir's window: CelosUI's background and grain, fenrir's shell (screens/shell.cpp) and the open page from screens/
 
 void celosia::render::main_window() {
     const ImVec2 pos(0.f, 0.f);
@@ -17,19 +17,16 @@ void celosia::render::main_window() {
             base, ImColor(main.x, main.y, main.z, 0.55f), ImColor(accent.x, accent.y, accent.z, 0.45f), (float)style::general::rounding_window);
     }
     effects::noise(drawlist, pos, pos + celosia::ui::size, style::window::noise, (float)style::general::rounding_window);
-    render::titlebar();
-    render::sidebar();
+    fenrir::shell::sidebar(); // before the titlebar, so the keyboard starts on the pages
+    fenrir::shell::titlebar();
 
     render::tab_content.drawlist = drawlist;
     render::tab_content.vtx_begin = drawlist->VtxBuffer.Size;
-    namespace screens = fenrir::screens;
-    using page = void (*)();
-    static constexpr page pages[] = { screens::home, screens::recover, screens::images, screens::erase, screens::reports, screens::settings };
-    static_assert(IM_ARRAYSIZE(pages) == IM_ARRAYSIZE(screens::tabs), "a page for every tab");
-    for (int i = 0; i < IM_ARRAYSIZE(pages); i++)
-        if (ui::tab_current == screens::tabs[i]) // the tab being drawn, see ui::tab_current
-            pages[i]();
+    for (const fenrir::screens::t_page& page : fenrir::screens::pages)
+        if (ui::tab_current == page.name) // the tab being drawn, see ui::tab_current
+            page.draw();
     render::tab_content.vtx_end = drawlist->VtxBuffer.Size;
 
+    fenrir::shell::window_buttons();
     window::end();
 }

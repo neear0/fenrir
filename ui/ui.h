@@ -248,6 +248,8 @@ namespace celosia {
 		ImVec2 screen_size();
 		void move(ImVec2 pos);
 		void bring_to_top();
+		void minimize();
+		void close(); // asks the window to close, poll() returns false once it has
 
 		bool blur_supported(); // the os can blur what's behind the window (windows, kwin on x11), known once create() ran, see style::window::background
 		void set_blur(bool enabled); // on x11 the blurred area follows style::general::rounding_window, call it again after changing that

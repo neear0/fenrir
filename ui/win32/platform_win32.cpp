@@ -117,6 +117,14 @@ void celosia::platform::bring_to_top() { // back above other topmost windows tha
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
+void celosia::platform::minimize() {
+    ShowWindow(hwnd, SW_MINIMIZE);
+}
+
+void celosia::platform::close() { // the same way the taskbar or alt+f4 closes it, WM_DESTROY then quits the loop
+    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+}
+
 bool celosia::platform::blur_supported() {
     return true;
 }

@@ -121,6 +121,8 @@ set(celos_ui_sources
     ui/widgets/functions/render_frame_border_animated.cpp
     ui/widgets/functions/render_frame_border_color.cpp
     ui/widgets/virtual_list.cpp
+    ui/render/screens/icons.cpp
+    ui/render/screens/shell.cpp
     ui/render/screens/home.cpp
     ui/render/screens/recover.cpp
     ui/render/screens/images.cpp
