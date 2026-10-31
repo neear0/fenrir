@@ -15,6 +15,7 @@ add_executable(storage_tests
     unit/test_sources.cpp
     unit/test_partitions.cpp
     unit/test_fat32.cpp
+    unit/test_exfat.cpp
     unit/test_carving.cpp
     unit/test_session.cpp
 )
@@ -38,6 +39,7 @@ set_tests_properties(cli_refuses_missing_image PROPERTIES WILL_FAIL TRUE)
 
 # the disk images from tools/make_fixtures/fixtures.h, written before the cli tests that read them
 add_executable(make_fixtures ${PROJECT_SOURCE_DIR}/tools/make_fixtures/main.cpp ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fixtures.h ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fat32.h
+    ${PROJECT_SOURCE_DIR}/tools/make_fixtures/exfat.h
     ${PROJECT_SOURCE_DIR}/tools/make_fixtures/carving.h)
 set_target_properties(make_fixtures PROPERTIES OUTPUT_NAME fenrir-make-fixtures)
 fenrir_warnings(make_fixtures)
@@ -85,10 +87,19 @@ add_test(NAME cli_recover_matches_originals
         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/recovered -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
 set_tests_properties(cli_recover_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
 
+# exfat: the listing, and the deleted files recovered and compared with their originals. unlike fat32, a deleted file in
+# pieces comes back whole while the fat still has its chain
+cli_test(files_exfat "files;${images}/exfat.img;--why"
+    "volume: +partition 1, exFAT, 4096 byte clusters.*label FENRIR EX\n.*intact +15000 +deleted +/fragmented.bin\n.*FAT chain is still there.*\n.*partial +15000 +deleted +/interrupted.bin\n.*intact +9000 +deleted +/Photos/IMG_0001.jpg\n")
+add_test(NAME cli_recover_exfat_matches_originals
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/exfat.img -DORIGINALS=${images}/exfat_originals
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/recovered_exfat -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
+set_tests_properties(cli_recover_exfat_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
+
 # carving: the listing, and the carved files recovered and compared with their originals
 cli_test(carve "carve;${images}/carve.img;--why"
-    "carving: +the whole image, 12582912 bytes.*\n +0 +intact +10924 +JPEG +4191232 +00003ff400[.]jpg\n.*all 480 blocks of its image data decode.*\n +9 +intact +4849 +DOCX .*\n +10 +partial +8192 +JPEG .*\n.*\n14 files, and 2 more that the FAT32 scan of partition 1 finds.*\n5 signatures didn't hold up")
-cli_test(carve_partition "carve;${images}/carve.img;--partition;1" "carving: +partition 1, .*\n\n.*\n\n0 files, and 2 more that the FAT32 scan of partition 1 finds")
+    "carving: +the whole image, 12582912 bytes.*\n +0 +intact +10924 +JPEG +4191232 +00003ff400[.]jpg\n.*all 480 blocks of its image data decode.*\n +9 +intact +4849 +DOCX .*\n +10 +partial +8192 +JPEG .*\n.*\n14 files, and 2 more that the filesystem scan of partition 1 finds.*\n5 signatures didn't hold up")
+cli_test(carve_partition "carve;${images}/carve.img;--partition;1" "carving: +partition 1, .*\n\n.*\n\n0 files, and 2 more that the filesystem scan of partition 1 finds")
 cli_test(carve_rejects_a_fake_jpeg "carve;${images}/fat32.img" "\n0 files\n1 signature didn't hold up as files and was left out")
 add_test(NAME cli_recover_carved_matches_originals
     COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/carve.img -DORIGINALS=${images}/carve_originals

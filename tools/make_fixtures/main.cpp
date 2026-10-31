@@ -1,5 +1,5 @@
-// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h, fat32.h and carving.h into dir, and into
-// dir/fat32_originals and dir/carve_originals what each recoverable file in fat32.img and carve.img has to come back as,
+// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h, fat32.h, exfat.h and carving.h into dir, and
+// into dir/<name>_originals what each recoverable file in fat32.img, exfat.img and carve.img has to come back as,
 // at the path `fenrir-cli recover` gives it. run by ctest before the cli tests, it only ever writes into the build
 // directory it's given
 
@@ -8,6 +8,7 @@
 #include <print>
 
 #include "carving.h"
+#include "exfat.h"
 #include "fat32.h"
 #include "fixtures.h"
 
@@ -53,14 +54,19 @@ int main(int argc, char** argv) {
 	ok &= write(dir / "fat32.img", fixtures::fat32_disk());
 
 	// the deleted files an export must reproduce exactly, partial ones as far as they're recoverable
-	std::filesystem::remove_all(dir / "fat32_originals", error);
-	for (const fixtures::t_fat32_expected& file : fixtures::fat32_scenario().expected) {
-		if (!file.deleted || file.directory || !file.matches_original || file.integrity == "unrecoverable")
-			continue;
-		const bool partial = file.recoverable < file.original.size();
-		const fixtures::t_image content(file.original.begin(), file.original.begin() + static_cast<std::ptrdiff_t>(file.recoverable));
-		ok &= write(dir / "fat32_originals" / utf8_path(file.path.substr(1) + (partial ? ".partial" : "")), content);
-	}
+	auto originals = [&](const std::string& name, const std::vector<fixtures::t_fat32_expected>& expected) {
+		std::filesystem::remove_all(dir / name, error);
+		for (const fixtures::t_fat32_expected& file : expected) {
+			if (!file.deleted || file.directory || !file.matches_original || file.integrity == "unrecoverable")
+				continue;
+			const bool partial = file.recoverable < file.original.size();
+			const fixtures::t_image content(file.original.begin(), file.original.begin() + static_cast<std::ptrdiff_t>(file.recoverable));
+			ok &= write(dir / name / utf8_path(file.path.substr(1) + (partial ? ".partial" : "")), content);
+		}
+	};
+	originals("fat32_originals", fixtures::fat32_scenario().expected);
+	ok &= write(dir / "exfat.img", fixtures::exfat_disk());
+	originals("exfat_originals", fixtures::exfat_scenario().expected);
 
 	// the carved files `fenrir-cli recover --carved` must reproduce, under carved/ like it writes them. the ones the
 	// fat32 scan finds too are left out of a carve, and a fragmented jpeg's cut isn't known in advance

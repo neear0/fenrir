@@ -214,7 +214,7 @@ storage::Result<storage::CarveScan> storage::carve(IBlockSource& source, const C
 std::size_t storage::drop_known(std::vector<RecoveryCandidate>& carved, std::span<const RecoveryCandidate> known, std::uint64_t base) {
 	std::unordered_set<std::uint64_t> starts;
 	for (const RecoveryCandidate& k : known)
-		if (!k.directory && !k.extents.empty() && k.extents.front().length != 0)
+		if (!k.directory && !k.extents.empty() && k.extents.front().length != 0 && !k.extents.front().zeros)
 			if (const auto start = checked_add(base, k.extents.front().offset))
 				starts.insert(*start);
 	const std::size_t dropped = std::erase_if(carved, [&](const RecoveryCandidate& c) { return !c.extents.empty() && starts.contains(c.extents.front().offset); });

@@ -1,6 +1,7 @@
 // the only file in the engine allowed to write (tests/check_no_write_apis.cmake lets src/export/ create files and remove
 // the ones it created itself, nothing else). it reads through IBlockSource and creates new files with noreplace
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <new>
@@ -107,10 +108,10 @@ namespace {
 			return ExportedFile{ target, 0, Sha256::of({}), true };
 		}
 
-		std::uint64_t in_extents = 0;
+		std::uint64_t in_extents = candidate.resident.size();
 		for (const Extent& extent : candidate.extents)
 			in_extents += extent.length;
-		if (in_extents != candidate.recoverable_bytes)
+		if (in_extents != candidate.recoverable_bytes || (!candidate.resident.empty() && !candidate.extents.empty()))
 			return fail(Errc::invalid_argument, "exporting: its extents don't add up to its recoverable bytes");
 
 		fs::create_directories(target.parent_path(), error);
@@ -129,13 +130,23 @@ namespace {
 		std::unique_ptr<std::byte[]> buffer(new std::byte[piece]);
 		Sha256 hasher;
 		std::uint64_t done = 0;
+		if (!candidate.resident.empty()) {
+			hasher.update(candidate.resident);
+			out.write(reinterpret_cast<const char*>(candidate.resident.data()), static_cast<std::streamsize>(candidate.resident.size()));
+			if (!out)
+				return fail(Errc::io_error, "exporting: writing the file");
+			done = candidate.resident.size();
+		}
 		for (const Extent& extent : candidate.extents) {
+			if (extent.zeros)
+				std::fill_n(buffer.get(), std::min<std::uint64_t>(piece, extent.length), std::byte{ 0 });
 			for (std::uint64_t offset = 0; offset < extent.length;) {
 				if (cancel && cancel->cancelled())
 					return fail(Errc::cancelled, "exporting");
 				const std::span<std::byte> part(buffer.get(), static_cast<std::size_t>(std::min<std::uint64_t>(piece, extent.length - offset)));
-				if (Result<void> read = read_exact(volume, extent.offset + offset, part); !read)
-					return std::unexpected(read.error());
+				if (!extent.zeros)
+					if (Result<void> read = read_exact(volume, extent.offset + offset, part); !read)
+						return std::unexpected(read.error());
 				hasher.update(part);
 				out.write(reinterpret_cast<const char*>(part.data()), static_cast<std::streamsize>(part.size()));
 				if (!out)

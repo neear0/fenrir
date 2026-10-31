@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "make_fixtures/carving.h"
+#include "make_fixtures/exfat.h"
 #include "storage/carving.h"
 #include "storage/memory_source.h"
 #include "storage/session.h"
@@ -244,4 +245,46 @@ TEST_CASE("a stopped deep scan goes on where it stopped and finds the same files
 		resumed = true;
 	}
 	CHECK(resumed);
+}
+
+TEST_CASE("a session reads an exfat volume and exports from it, zeros past the valid data length included") {
+	t_temp_dir dir;
+	const auto scenario = fixtures::exfat_scenario();
+	const fs::path image = write_image(dir.path, fixtures::exfat_disk());
+	storage::RecoverySession session;
+	REQUIRE(session.scan(image, { .carve = false }));
+	session.wait();
+	const auto s = session.snapshot();
+	CAPTURE(s->status);
+	CHECK_FALSE(s->error);
+	REQUIRE(s->volumes.size() == 2);
+	CHECK(s->volumes[1].filesystem == storage::FileSystem::exfat);
+	CHECK(s->volumes[1].scanned);
+	REQUIRE(s->files->size() == scenario.expected.size());
+	std::uint64_t pre = UINT64_MAX;
+	for (const storage::FoundFile& f : *s->files)
+		if (f.file.path == "/preallocated.dat")
+			pre = f.file.id;
+	REQUIRE(pre != UINT64_MAX);
+
+	REQUIRE(session.export_files({ pre }, dir.path / "out"));
+	session.wait();
+	const auto exported = session.snapshot();
+	REQUIRE(exported->exported->size() == 1);
+	CHECK(exported->exported->front().error.empty());
+	const auto want = std::ranges::find(scenario.expected, "/preallocated.dat", &fixtures::t_exfat_expected::path)->original;
+	CHECK(read_file(dir.path / "out" / "partition 1" / "preallocated.dat") == want);
+	const std::string report = [&] {
+		const auto bytes = read_file(exported->report);
+		return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	}();
+	CHECK(report.find("in partition 1's exFAT records") != std::string::npos);
+
+	session.preview(pre);
+	for (int i = 0; i < 2000 && !session.preview_result().ready; i++)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	const storage::FilePreview p = session.preview_result();
+	REQUIRE(p.ready);
+	CHECK(p.error.empty());
+	CHECK(p.bytes.size() == 256);
 }

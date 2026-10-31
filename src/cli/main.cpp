@@ -22,7 +22,7 @@
 
 #include "storage/carving.h"
 #include "storage/exporter.h"
-#include "storage/fat32.h"
+#include "storage/filesystem.h"
 #include "storage/file_image_source.h"
 #include "storage/hash.h"
 #include "storage/hex_dump.h"
@@ -41,12 +41,12 @@ namespace {
 			"  hex <image> [offset] [length]        show bytes from it, 512 from offset 0 unless told (0x for hex)\n"
 			"  hash <image>                         its SHA-256\n"
 			"  files <image> [--partition N] [--all] [--why]\n"
-			"                                       the deleted files on a FAT32 volume, how recoverable each one is\n"
+			"                                       the deleted files on a FAT32 or exFAT volume, how recoverable each is\n"
 			"                                       and (--why) what that's based on. --all lists the live ones too\n"
 			"  carve <image> [--partition N] [--every-byte] [--why]\n"
 			"                                       files found by their content alone (JPEG, PNG, PDF, ZIP and what\n"
 			"                                       a zip can be: DOCX, ODT, JAR...) on the whole image, or one\n"
-			"                                       partition. ones a FAT32 scan finds too are left out, `files` has\n"
+			"                                       partition. ones a filesystem scan finds too are left out, `files` has\n"
 			"                                       them. --every-byte looks for them at every byte, not every 512th\n"
 			"  recover <image> <dir> [--carved] [--partition N] [--every-byte] [--id N]...\n"
 			"                                       copy deleted files (--carved: carved ones) out to dir: all that\n"
@@ -259,15 +259,16 @@ namespace {
 		return 0;
 	}
 
-	// the fat32 volume in an image: the partition asked for, else the first one that looks like fat32, else the whole
+	// the volume in an image: the partition asked for, else the first one fenrir can read the filesystem of, else the whole
 	// image when it has no partition table. nothing, with the reason printed, when there isn't one
 	struct t_volume {
 		std::unique_ptr<storage::PartitionView> partition; // null: the whole image is the volume
 		storage::IBlockSource* source = nullptr;
 		std::string where;
+		storage::FileSystem filesystem = storage::FileSystem::unknown;
 	};
 
-	std::optional<t_volume> fat32_volume(storage::FileImageSource& image, std::optional<std::uint64_t> number) {
+	std::optional<t_volume> find_volume(storage::FileImageSource& image, std::optional<std::uint64_t> number) {
 		auto map = storage::scan_partitions(image);
 		if (!map) {
 			print_error(map.error());
@@ -276,7 +277,7 @@ namespace {
 		t_volume volume;
 		const storage::Partition* chosen = nullptr;
 		for (const storage::Partition& p : map->partitions)
-			if (number ? p.number == *number : p.filesystem == storage::FileSystem::fat32) {
+			if (number ? p.number == *number : storage::can_scan(p.filesystem) && p.inside_disk) {
 				chosen = &p;
 				break;
 			}
@@ -289,30 +290,32 @@ namespace {
 			volume.partition = std::move(*view);
 			volume.source = volume.partition.get();
 			volume.where = std::format("partition {}", chosen->number);
+			volume.filesystem = chosen->filesystem;
 		} else if (!number && map->partitions.empty()) {
 			volume.source = &image;
 			volume.where = "the whole image";
+			volume.filesystem = map->whole_disk;
 		} else {
 			if (number)
 				std::println(stderr, "error: there's no partition {}, `fenrir-cli partitions` lists them", *number);
 			else
-				std::println(stderr, "error: no partition looks like FAT32, pick one with --partition N");
+				std::println(stderr, "error: no partition looks like a FAT32 or exFAT one, pick one with --partition N");
 			return std::nullopt;
 		}
 		return volume;
 	}
 
-	std::optional<storage::Fat32Scan> scan_volume(t_volume& volume) {
-		auto scanned = storage::scan_fat32(*volume.source);
+	std::optional<storage::VolumeScan> scan_volume(t_volume& volume) {
+		if (!storage::can_scan(volume.filesystem)) {
+			std::println(stderr, "error: {} looks like {}, fenrir can't read its records (FAT32 and exFAT only so far)", volume.where, storage::to_string(volume.filesystem));
+			return std::nullopt;
+		}
+		auto scanned = storage::scan_volume(*volume.source, volume.filesystem);
 		if (!scanned) {
 			print_error(scanned.error());
 			return std::nullopt;
 		}
-		const storage::Fat32Volume& v = scanned->volume;
-		std::print("volume:  {}, FAT32, {} byte clusters, {} clusters ({} free)", volume.where, v.cluster_size, v.cluster_count, v.free_clusters);
-		if (!v.label.empty())
-			std::print(", label {}", v.label);
-		std::println("");
+		std::println("volume:  {}, {}", volume.where, scanned->summary);
 		return std::move(*scanned);
 	}
 
@@ -329,7 +332,7 @@ namespace {
 		auto image = open(path);
 		if (!image)
 			return 1;
-		auto volume = fat32_volume(*image, partition);
+		auto volume = find_volume(*image, partition);
 		if (!volume)
 			return 1;
 		auto scan = scan_volume(*volume);
@@ -379,7 +382,7 @@ namespace {
 		auto image = open(path);
 		if (!image)
 			return 1;
-		auto volume = fat32_volume(*image, partition);
+		auto volume = find_volume(*image, partition);
 		if (!volume)
 			return 1;
 		auto scan = scan_volume(*volume);
@@ -403,14 +406,14 @@ namespace {
 		return export_all(*volume->source, chosen, destination);
 	}
 
-	// a carve of the whole image or one partition, without what a fat32 scan of the same area finds: those come back
+	// a carve of the whole image or one partition, without what a filesystem scan of the same area finds: those come back
 	// with their names from `files`
 	struct t_carving {
 		std::unique_ptr<storage::PartitionView> partition; // null: the whole image was carved
 		storage::IBlockSource* source = nullptr;
 		storage::CarveScan scan;
 		std::size_t dropped = 0;
-		std::vector<std::string> volumes; // the fat32 volumes whose files were left out
+		std::vector<std::string> volumes; // the volumes whose files were left out
 	};
 
 	std::optional<t_carving> carve_image(storage::FileImageSource& image, std::optional<std::uint64_t> number, bool every_byte) {
@@ -419,13 +422,14 @@ namespace {
 			print_error(map.error());
 			return std::nullopt;
 		}
-		struct t_fat32 { // a fat32 volume in the carved area, from base on
+		struct t_known { // a volume fenrir can read the records of in the carved area, from base on
 			storage::IBlockSource* source;
 			std::unique_ptr<storage::PartitionView> view;
 			std::uint64_t base;
 			std::string where;
+			storage::FileSystem filesystem;
 		};
-		std::vector<t_fat32> volumes;
+		std::vector<t_known> volumes;
 		t_carving out;
 		std::string where;
 		if (number) {
@@ -442,17 +446,17 @@ namespace {
 			out.partition = std::move(*view);
 			out.source = out.partition.get();
 			where = std::format("partition {}", *number);
-			if (p->filesystem == storage::FileSystem::fat32)
-				volumes.push_back({ out.source, nullptr, 0, where });
+			if (storage::can_scan(p->filesystem))
+				volumes.push_back({ out.source, nullptr, 0, where, p->filesystem });
 		} else {
 			out.source = &image;
 			where = "the whole image";
 			for (const storage::Partition& p : map->partitions)
-				if (p.filesystem == storage::FileSystem::fat32 && p.inside_disk)
+				if (storage::can_scan(p.filesystem) && p.inside_disk)
 					if (auto view = storage::open_partition(image, p))
-						volumes.push_back({ view->get(), std::move(*view), p.offset_bytes, std::format("partition {}", p.number) });
-			if (map->partitions.empty() && map->whole_disk == storage::FileSystem::fat32)
-				volumes.push_back({ &image, nullptr, 0, "the image's own" });
+						volumes.push_back({ view->get(), std::move(*view), p.offset_bytes, std::format("partition {}", p.number), p.filesystem });
+			if (map->partitions.empty() && storage::can_scan(map->whole_disk))
+				volumes.push_back({ &image, nullptr, 0, "the image's own", map->whole_disk });
 		}
 
 		const std::uint64_t size = out.source->size_bytes();
@@ -466,11 +470,11 @@ namespace {
 			}
 			out.scan = std::move(*scan);
 		}
-		for (const t_fat32& v : volumes) {
-			auto fat = storage::scan_fat32(*v.source);
-			if (!fat)
-				continue; // it only looked like fat32, there's nothing to leave out
-			out.dropped += storage::drop_known(out.scan.candidates, fat->candidates, v.base);
+		for (const t_known& v : volumes) {
+			auto known = storage::scan_volume(*v.source, v.filesystem);
+			if (!known)
+				continue; // it only looked like one, there's nothing to leave out
+			out.dropped += storage::drop_known(out.scan.candidates, known->candidates, v.base);
 			out.volumes.push_back(v.where);
 		}
 		return out;
@@ -499,7 +503,7 @@ namespace {
 			std::string volumes;
 			for (const std::string& v : carving->volumes)
 				volumes += (volumes.empty() ? "" : ", ") + v;
-			std::print(", and {} more that the FAT32 scan of {} finds with their names (`files --all` lists them)", carving->dropped, volumes);
+			std::print(", and {} more that the filesystem scan of {} finds with their names (`files --all` lists them)", carving->dropped, volumes);
 		}
 		std::println("");
 		if (s.rejected != 0)

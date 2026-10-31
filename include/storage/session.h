@@ -16,7 +16,7 @@
 
 // a recovery session: one disk image, scanned and exported by the session's own threads while whoever drives it (the
 // ui) reads snapshots of how far it got. the ui never touches the image: every read happens here, off its thread, and
-// every write in the exporter. a scan reads the partition table, every FAT32 volume's directories, then (the deep scan)
+// every write in the exporter. a scan reads the partition table, every volume's filesystem records (FAT32, exFAT), then (the deep scan)
 // carves the whole image in slices, so files show up while it runs and a stopped deep scan can go on where it stopped
 namespace storage {
 	// an area of the image files were found in: the whole image (carving, or a disk without a partition table) or a
@@ -25,7 +25,7 @@ namespace storage {
 		std::string name;                    // "the whole image", "partition 1"
 		std::uint64_t offset = 0, size = 0;  // bytes, in the image
 		FileSystem filesystem = FileSystem::unknown;
-		bool scanned = false;                // its filesystem's records were read (FAT32 so far)
+		bool scanned = false;                // its filesystem's records were read (FAT32 and exFAT so far)
 		std::uint64_t files = 0;             // found in it
 	};
 
@@ -46,7 +46,7 @@ namespace storage {
 	enum class SessionPhase : std::uint8_t {
 		idle,        // nothing running
 		opening,     // the image and its partition table
-		filesystems, // FAT32 volumes' directories
+		filesystems, // the volumes' filesystem records
 		carving,     // the deep scan
 		exporting,
 	};
@@ -104,7 +104,7 @@ namespace storage {
 		// each starts a job and returns at once: false while another one runs
 		bool scan(const std::filesystem::path& image, const ScanOptions& options = {}); // closes the last image
 		bool resume(); // the deep scan, from where it was stopped
-		// to new files in destination: FAT32 files under their partition's name and path, carved ones under carved/,
+		// to new files in destination: files a filesystem had under their partition's name and path, carved ones under carved/,
 		// then a report of what was written. directories and unrecoverable files are left out
 		bool export_files(std::vector<std::uint64_t> ids, const std::filesystem::path& destination);
 		void cancel();   // the running job stops at its next step, what it found so far stays

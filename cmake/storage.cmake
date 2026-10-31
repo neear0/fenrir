@@ -25,6 +25,8 @@ add_library(storage_core STATIC
     include/storage/diagnostic.h
     include/storage/recovery_candidate.h
     include/storage/fat32.h
+    include/storage/exfat.h
+    include/storage/filesystem.h
     include/storage/exporter.h
     include/storage/carving.h
     include/storage/session.h
@@ -35,7 +37,11 @@ add_library(storage_core STATIC
     src/io/fault_injecting_source.cpp
     src/partition/partition.cpp
     src/partition/scan.cpp
+    src/fs/common.h
+    src/fs/common.cpp
+    src/fs/scan_volume.cpp
     src/fs/fat32/scan.cpp
+    src/fs/exfat/scan.cpp
     src/export/exporter.cpp
     src/carving/formats.h
     src/carving/carve.cpp

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -27,15 +28,18 @@ namespace storage {
 	struct Extent {
 		std::uint64_t offset = 0; // bytes, from the start of the volume the scanner was given
 		std::uint64_t length = 0;
+		bool zeros = false;       // nothing on the disk: the file reads as zeros here (an ntfs sparse run, an exfat file past
+		                          // its valid data length). offset means nothing then
 	};
 
-	// as the filesystem stored it: fat keeps local time with no zone, so this can't be converted to utc
+	// as the filesystem stored it: fat and exfat keep the local time of whoever wrote it, ntfs keeps utc
 	struct Timestamp {
 		std::uint16_t year = 0;
 		std::uint8_t month = 0, day = 0, hour = 0, minute = 0, second = 0;
 		std::uint16_t millisecond = 0;
 		bool valid = false;  // false when the field was 0 or out of range
 		bool date_only = false;
+		bool utc = false;
 	};
 
 	struct RecoveryCandidate {
@@ -53,6 +57,8 @@ namespace storage {
 		std::uint64_t size = 0;              // what the directory entry says. carved: as far as its structure went
 		std::uint64_t recoverable_bytes = 0; // what an export writes: size, or less for partial ones
 		std::vector<Extent> extents;         // where the recoverable bytes are, in order
+		std::vector<std::byte> resident;     // the bytes themselves, when the filesystem keeps them in the file's own record (ntfs
+		                                     // resident data): extents is empty then
 		Integrity integrity = Integrity::unrecoverable;
 		std::vector<std::string> reasons;    // why that integrity, in plain words: what was checked and what was assumed
 

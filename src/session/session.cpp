@@ -14,7 +14,7 @@
 
 #include "storage/carving.h"
 #include "storage/exporter.h"
-#include "storage/fat32.h"
+#include "storage/filesystem.h"
 #include "storage/file_image_source.h"
 #include "storage/session.h"
 
@@ -205,25 +205,26 @@ struct storage::RecoverySession::t_impl {
 			state.version++;
 		}
 
-		// the filesystems: every fat32 volume's directories, live and deleted
-		std::vector<std::uint32_t> fat32;
+		// the filesystems: every volume fenrir can read the records of, live and deleted files
+		std::vector<std::uint32_t> readable;
 		for (std::uint32_t v = 0; v < volumes.size(); v++)
-			if (volumes[v].filesystem == FileSystem::fat32)
-				fat32.push_back(v);
-		total = fat32.size();
-		for (std::size_t i = 0; i < fat32.size(); i++) {
-			const std::uint32_t v = fat32[i];
+			if (can_scan(volumes[v].filesystem))
+				readable.push_back(v);
+		total = readable.size();
+		for (std::size_t i = 0; i < readable.size(); i++) {
+			const std::uint32_t v = readable[i];
+			const std::string_view kind = to_string(volumes[v].filesystem);
 			publish([&](SessionSnapshot& s) {
 				s.phase = SessionPhase::filesystems;
-				s.status = std::format("reading the FAT32 directories on {}", volumes[v].name);
+				s.status = std::format("reading the {} records on {}", kind, volumes[v].name);
 			});
-			auto scanned = scan_fat32(*sources_now->volumes[v], &token);
+			auto scanned = scan_volume(*sources_now->volumes[v], volumes[v].filesystem, &token);
 			done = i + 1;
 			if (!scanned && scanned.error().code == Errc::cancelled)
 				return stopped(scanned.error(), std::format("stopped while reading {}", volumes[v].name));
 			publish([&](SessionSnapshot& s) {
 				if (!scanned) {
-					note(s, Diagnostic::Severity::error, std::format("{}: couldn't be read as FAT32: {}", volumes[v].name, error_text(scanned.error())));
+					note(s, Diagnostic::Severity::error, std::format("{}: couldn't be read as {}: {}", volumes[v].name, kind, error_text(scanned.error())));
 					return;
 				}
 				for (const Diagnostic& d : scanned->diagnostics)
@@ -267,7 +268,7 @@ struct storage::RecoverySession::t_impl {
 			return stopped(Error{ Errc::invalid_argument, "the deep scan", 0 }, "there's no image open");
 		std::unordered_set<std::uint64_t> known;
 		for (const FoundFile& f : *known_files)
-			if (f.file.origin == Origin::filesystem && !f.file.directory && !f.file.extents.empty() && f.file.extents.front().length != 0)
+			if (f.file.origin == Origin::filesystem && !f.file.directory && !f.file.extents.empty() && f.file.extents.front().length != 0 && !f.file.extents.front().zeros)
 				known.insert(volumes[f.volume].offset + f.file.extents.front().offset);
 
 		const std::uint64_t size = src->image->size_bytes();
@@ -443,7 +444,7 @@ struct storage::RecoverySession::t_impl {
 			if (f.file.origin == Origin::carved)
 				out += std::format("  found:       by its content, a {} at byte {} of the image\n", f.file.format, f.file.entry_offset);
 			else
-				out += std::format("  found:       in {}'s FAT32 records, {}\n", about.volumes[f.volume].name, f.file.deleted ? "deleted" : "not deleted");
+				out += std::format("  found:       in {}'s {} records, {}\n", about.volumes[f.volume].name, to_string(about.volumes[f.volume].filesystem), f.file.deleted ? "deleted" : "not deleted");
 			for (const std::string& reason : f.file.reasons)
 				out += "  - " + reason + "\n";
 		}
@@ -473,8 +474,13 @@ struct storage::RecoverySession::t_impl {
 				p.error = "there's nothing to read";
 			} else {
 				const FoundFile& f = (*files)[static_cast<std::size_t>(id)];
-				if (f.file.extents.empty() || f.file.recoverable_bytes == 0) {
+				if (!f.file.resident.empty()) {
+					p.offset = volume_offset + f.file.entry_offset; // the bytes are in its record, somewhere after this
+					p.bytes.assign(f.file.resident.begin(), f.file.resident.begin() + static_cast<std::ptrdiff_t>(std::min(preview_bytes, f.file.resident.size())));
+				} else if (f.file.extents.empty() || f.file.recoverable_bytes == 0) {
 					p.error = f.file.directory ? "it's a directory" : "nothing of it is recoverable";
+				} else if (f.file.extents.front().zeros) {
+					p.bytes.assign(static_cast<std::size_t>(std::min<std::uint64_t>(preview_bytes, f.file.extents.front().length)), std::byte{ 0 });
 				} else {
 					const Extent& e = f.file.extents.front();
 					p.offset = volume_offset + e.offset;

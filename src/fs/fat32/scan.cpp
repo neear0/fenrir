@@ -7,15 +7,15 @@
 
 #include "storage/bytes.h"
 #include "storage/fat32.h"
+#include "../common.h"
 
 namespace {
 	using namespace storage;
 	using Severity = Diagnostic::Severity;
 
-	constexpr std::uint64_t max_fat_bytes = 256ull << 20; // 64M clusters, more than any fat32 volume windows makes
-	constexpr int max_depth = 64;
-	constexpr std::size_t max_diagnostics = 200;
-	constexpr std::size_t max_conflict_checks = 64;   // per candidate, so thousands of entries on one cluster stay cheap
+	using fsutil::max_depth;
+	using fsutil::put_utf8;
+	using fsutil::utf8;
 	constexpr std::uint32_t fat_mask = 0x0FFFFFFF, fat_bad = 0x0FFFFFF7, fat_end = 0x0FFFFFF8;
 	constexpr std::uint8_t attr_volume = 0x08, attr_directory = 0x10, attr_lfn = 0x0F;
 	constexpr std::uint8_t deleted_mark = 0xE5;
@@ -123,40 +123,6 @@ namespace {
 		return sum;
 	}
 
-	void put_utf8(std::string& out, char32_t c) {
-		if (c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) || (c >= 0xD800 && c <= 0xDFFF))
-			c = 0xFFFD; // control characters and stray surrogates: names end up in terminals and the ui
-		if (c < 0x80) {
-			out += static_cast<char>(c);
-		} else if (c < 0x800) {
-			out += static_cast<char>(0xC0 | (c >> 6));
-			out += static_cast<char>(0x80 | (c & 0x3F));
-		} else if (c < 0x10000) {
-			out += static_cast<char>(0xE0 | (c >> 12));
-			out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-			out += static_cast<char>(0x80 | (c & 0x3F));
-		} else {
-			out += static_cast<char>(0xF0 | (c >> 18));
-			out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
-			out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
-			out += static_cast<char>(0x80 | (c & 0x3F));
-		}
-	}
-
-	std::string utf8(const std::u16string& text) {
-		std::string out;
-		for (std::size_t i = 0; i < text.size(); i++) {
-			const char32_t unit = text[i];
-			if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < text.size() && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF) {
-				put_utf8(out, 0x10000 + ((unit - 0xD800) << 10) + (text[i + 1] - 0xDC00));
-				i++;
-			} else {
-				put_utf8(out, unit);
-			}
-		}
-		return out;
-	}
-
 	// "NOTES.TXT", lowercased where the entry's case bits say so (that's how windows stores "notes.txt" without a long
 	// name). bytes past ascii are in an oem code page the volume doesn't name, they become U+FFFD
 	std::string format_short_name(const std::array<std::uint8_t, 11>& name, std::uint8_t case_bits) {
@@ -231,26 +197,17 @@ namespace {
 		}
 	};
 
-	struct t_run { // the clusters a deleted file's recovery relies on
-		std::uint64_t first, end; // [first, end)
-		std::size_t candidate;
-	};
-
 	class t_scanner {
 	public:
 		t_scanner(IBlockSource& source, Fat32Scan& scan, const CancellationToken* cancel) : source_(source), scan_(scan), v_(scan.volume), cancel_(cancel) {}
 
 		void note(Severity severity, std::string message) {
-			auto& d = scan_.diagnostics;
-			if (d.size() < max_diagnostics)
-				d.push_back({ severity, std::move(message) });
-			else if (d.size() == max_diagnostics)
-				d.push_back({ Severity::warning, "more problems were found than are listed here" });
+			fsutil::note(scan_.diagnostics, severity, std::move(message));
 		}
 
 		Result<void> load_fat() {
 			const std::uint64_t bytes = (std::uint64_t(v_.cluster_count) + 2) * 4;
-			if (bytes > max_fat_bytes)
+			if (bytes > fsutil::max_table_bytes)
 				return fail(Errc::unsupported, "reading the FAT: it's bigger than the 256 MiB fenrir loads");
 			fat_.resize(static_cast<std::size_t>(bytes / 4));
 			std::vector<std::byte> raw(static_cast<std::size_t>(bytes));
@@ -296,7 +253,7 @@ namespace {
 			walk(root, RecoveryCandidate::no_parent, "", 0, false);
 			if (cancelled_)
 				return fail(Errc::cancelled, "scanning FAT32");
-			find_conflicts();
+			fsutil::mark_shared_claims(claims_, scan_.candidates);
 			if (ignored_long_names_ > 0)
 				note(Severity::info, std::format("{} long name{} didn't match the entry after {} and {} ignored", ignored_long_names_,
 					ignored_long_names_ == 1 ? "" : "s", ignored_long_names_ == 1 ? "it" : "them", ignored_long_names_ == 1 ? "was" : "were"));
@@ -605,7 +562,7 @@ namespace {
 			if (run == need) {
 				cand.integrity = Integrity::intact;
 				cand.reasons.push_back(need == 1
-					? std::format("its one cluster ({}) is free and nothing else claims it", first)
+					? std::format("its one cluster ({}) is free", first)
 					: std::format("clusters {} to {} are free, it's assumed to have been stored in one piece: FAT doesn't keep a deleted file's chain", first, first + need - 1));
 			} else {
 				cand.integrity = Integrity::partial;
@@ -616,7 +573,7 @@ namespace {
 				cand.integrity = Integrity::uncertain;
 				cand.reasons.push_back("the high half of its first cluster number is 0, which is also what windows leaves behind when it deletes from FAT32: the first cluster may be wrong");
 			}
-			runs_.push_back({ first, first + run, scan_.candidates.size() });
+			claims_.push_back({ first, first + run, scan_.candidates.size() });
 			scan_.candidates.push_back(std::move(cand));
 		}
 
@@ -633,32 +590,13 @@ namespace {
 			}
 		}
 
-		// deleted files whose clusters overlap: at most one of them still has its data there
-		void find_conflicts() {
-			std::ranges::sort(runs_, {}, &t_run::first);
-			for (std::size_t i = 0; i < runs_.size(); i++) {
-				for (std::size_t j = i + 1; j < runs_.size() && j - i <= max_conflict_checks && runs_[j].first < runs_[i].end; j++) {
-					const t_run& a = runs_[i];
-					const t_run& b = runs_[j];
-					const std::uint64_t from = b.first, to = std::min(a.end, b.end) - 1;
-					for (auto [mine, other] : { std::pair{ &a, &b }, std::pair{ &b, &a } }) {
-						RecoveryCandidate& cand = scan_.candidates[mine->candidate];
-						if (cand.integrity == Integrity::intact || cand.integrity == Integrity::partial)
-							cand.integrity = Integrity::uncertain;
-						cand.reasons.push_back(std::format("clusters {} to {} are also claimed by deleted entry #{}: at most one of them still has its data there",
-							from, to, scan_.candidates[other->candidate].id));
-					}
-				}
-			}
-		}
-
 		IBlockSource& source_;
 		Fat32Scan& scan_;
 		Fat32Volume& v_;
 		const CancellationToken* cancel_;
 		std::vector<std::uint32_t> fat_;
 		std::vector<bool> dir_seen_;
-		std::vector<t_run> runs_;
+		std::vector<fsutil::Claim> claims_;
 		std::uint64_t ignored_long_names_ = 0;
 		bool cancelled_ = false;
 	};

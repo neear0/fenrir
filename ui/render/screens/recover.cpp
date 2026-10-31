@@ -118,7 +118,8 @@ namespace {
         if (f.file.origin == Origin::carved)
             return "Carved: " + f.file.format;
         const std::string where = mock ? "partition 1" : f.volume < s.volumes.size() ? s.volumes[f.volume].name : "?";
-        return (f.file.deleted ? "FAT32, deleted, " : "FAT32, ") + where;
+        const std::string kind = mock || f.volume >= s.volumes.size() ? "FAT32" : std::string(storage::to_string(s.volumes[f.volume].filesystem));
+        return kind + (f.file.deleted ? ", deleted, " : ", ") + where;
     }
 
     // the words of text in lines no wider than width
@@ -219,9 +220,9 @@ namespace {
             size += ", " + app::thousands(c.recoverable_bytes) + " of them recoverable";
         field("Size", size, text);
         if (c.modified.valid) {
-            char date[48];
-            snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u:%02u, local time of the computer that wrote it", c.modified.year, c.modified.month, c.modified.day,
-                c.modified.hour, c.modified.minute, c.modified.second);
+            char date[96];
+            snprintf(date, sizeof(date), "%04u-%02u-%02u %02u:%02u:%02u, %s", c.modified.year, c.modified.month, c.modified.day,
+                c.modified.hour, c.modified.minute, c.modified.second, c.modified.utc ? "UTC" : "local time of the computer that wrote it");
             field("Modified", date, text);
         }
         field("Status", status_name(c.integrity), status_color(c.integrity));
@@ -267,7 +268,7 @@ namespace {
     // nothing open yet: what the page does, and the ways in
     void empty_state() {
         widgets::text("Open a disk image to look for deleted files in it. It's only ever read, never written to.");
-        widgets::text("The scan reads the partition table and every FAT32 volume's deleted files, then (the deep scan)");
+        widgets::text("The scan reads the partition table and every FAT32 and exFAT volume's deleted files, then (the deep scan)");
         widgets::text("looks through the whole image for JPEG, PNG, PDF and ZIP files by their content.");
         core::layout(ImVec2(0.f, core::font_size() * 0.5f));
         if (app::dialogs::available()) {
@@ -343,7 +344,7 @@ void fenrir::screens::recover() {
 
     std::string count = app::thousands(shown.size()) + " of " + app::thousands(files->size()) + " files";
     if (!mock && s.carve_dropped != 0)
-        count += "   (the deep scan found " + app::thousands(s.carve_dropped) + " of the FAT32 ones again, they're listed once)";
+        count += "   (the deep scan found " + app::thousands(s.carve_dropped) + " of the filesystems' ones again, they're listed once)";
     widgets::text(count.c_str());
 
     // the column titles, over the list's columns
