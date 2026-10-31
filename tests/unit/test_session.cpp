@@ -10,6 +10,7 @@
 
 #include "make_fixtures/carving.h"
 #include "make_fixtures/exfat.h"
+#include "make_fixtures/ntfs.h"
 #include "storage/carving.h"
 #include "storage/memory_source.h"
 #include "storage/session.h"
@@ -287,4 +288,50 @@ TEST_CASE("a session reads an exfat volume and exports from it, zeros past the v
 	REQUIRE(p.ready);
 	CHECK(p.error.empty());
 	CHECK(p.bytes.size() == 256);
+}
+
+TEST_CASE("a session reads an ntfs volume: resident, sparse and orphaned files exported as they were") {
+	t_temp_dir dir;
+	const auto scenario = fixtures::ntfs_scenario();
+	const fs::path image = write_image(dir.path, fixtures::ntfs_disk());
+	storage::RecoverySession session;
+	REQUIRE(session.scan(image, { .carve = false }));
+	session.wait();
+	const auto s = session.snapshot();
+	CAPTURE(s->status);
+	CHECK_FALSE(s->error);
+	REQUIRE(s->volumes.size() == 2);
+	CHECK(s->volumes[1].filesystem == storage::FileSystem::ntfs);
+	REQUIRE(s->files->size() == scenario.expected.size());
+	auto id_of = [&](std::string_view path) {
+		for (const storage::FoundFile& f : *s->files)
+			if (f.file.path == path)
+				return f.file.id;
+		FAIL("not found: " << path);
+		return std::uint64_t(0);
+	};
+	const std::vector<std::string_view> paths = { "/tiny.txt", "/sparse.vhd", "/$OrphanFiles/lost.txt" };
+	std::vector<std::uint64_t> ids;
+	for (std::string_view p : paths)
+		ids.push_back(id_of(p));
+
+	REQUIRE(session.export_files(ids, dir.path / "out"));
+	session.wait();
+	const auto exported = session.snapshot();
+	REQUIRE(exported->exported->size() == paths.size());
+	for (std::string_view p : paths) {
+		CAPTURE(p);
+		const auto want = std::ranges::find(scenario.expected, p, &fixtures::t_ntfs_expected::path)->original;
+		CHECK(read_file(dir.path / "out" / "partition 1" / fs::path(std::string(p.substr(1)))) == want);
+	}
+
+	session.preview(ids[0]);
+	for (int i = 0; i < 2000 && !session.preview_result().ready; i++)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	const storage::FilePreview p = session.preview_result();
+	REQUIRE(p.ready);
+	CHECK(p.error.empty());
+	REQUIRE(p.bytes.size() == 256);
+	const auto tiny = std::ranges::find(scenario.expected, "/tiny.txt", &fixtures::t_ntfs_expected::path)->original;
+	CHECK(std::equal(p.bytes.begin(), p.bytes.end(), tiny.begin()));
 }

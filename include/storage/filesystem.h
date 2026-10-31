@@ -19,7 +19,7 @@ namespace storage {
 		std::vector<Diagnostic> diagnostics;
 	};
 
-	// FAT32 and exFAT
+	// FAT32, exFAT and NTFS
 	bool can_scan(FileSystem filesystem) noexcept;
 
 	// volume read as filesystem, which partition scanning guessed from its signature. one it can't read: unsupported

@@ -212,8 +212,16 @@ namespace {
         std::string where;
         if (c.origin == Origin::carved)
             where = "byte " + app::thousands(c.entry_offset) + " of the image";
-        else if (!c.directory)
-            where = "cluster " + app::thousands(c.first_cluster) + ", its directory entry at byte " + app::thousands(c.entry_offset) + " of the volume";
+        else {
+            const bool ntfs = !mock && f.volume < s.volumes.size() && s.volumes[f.volume].filesystem == storage::FileSystem::ntfs;
+            const std::string record = (ntfs ? "its MFT record at byte " : "its directory entry at byte ") + app::thousands(c.entry_offset) + " of the volume";
+            if (!c.resident.empty())
+                where = "its data is in " + record;
+            else if (c.directory || c.extents.empty() || c.extents.front().zeros)
+                where = record;
+            else
+                where = "cluster " + app::thousands(c.first_cluster) + ", " + record;
+        }
         field("Found", found_by(f, s) + (where.empty() ? "" : ", " + where), text);
         std::string size = c.directory ? "a folder" : app::human_size(c.size) + " (" + app::thousands(c.size) + " bytes)";
         if (!c.directory && c.recoverable_bytes != c.size)
@@ -268,8 +276,8 @@ namespace {
     // nothing open yet: what the page does, and the ways in
     void empty_state() {
         widgets::text("Open a disk image to look for deleted files in it. It's only ever read, never written to.");
-        widgets::text("The scan reads the partition table and every FAT32 and exFAT volume's deleted files, then (the deep scan)");
-        widgets::text("looks through the whole image for JPEG, PNG, PDF and ZIP files by their content.");
+        widgets::text("The scan reads the partition table and the deleted files on every FAT32, exFAT and NTFS volume.");
+        widgets::text("Then the deep scan looks through the whole image for JPEG, PNG, PDF and ZIP files by their content.");
         core::layout(ImVec2(0.f, core::font_size() * 0.5f));
         if (app::dialogs::available()) {
             if (widgets::button("Open an image..."))

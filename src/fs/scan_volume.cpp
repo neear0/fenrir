@@ -4,6 +4,7 @@
 #include "storage/exfat.h"
 #include "storage/fat32.h"
 #include "storage/filesystem.h"
+#include "storage/ntfs.h"
 
 namespace {
 	using namespace storage;
@@ -19,7 +20,7 @@ namespace {
 }
 
 bool storage::can_scan(FileSystem filesystem) noexcept {
-	return filesystem == FileSystem::fat32 || filesystem == FileSystem::exfat;
+	return filesystem == FileSystem::fat32 || filesystem == FileSystem::exfat || filesystem == FileSystem::ntfs;
 }
 
 storage::Result<storage::VolumeScan> storage::scan_volume(IBlockSource& volume, FileSystem filesystem, const CancellationToken* cancel) noexcept {
@@ -38,6 +39,14 @@ storage::Result<storage::VolumeScan> storage::scan_volume(IBlockSource& volume, 
 				return std::unexpected(scanned.error());
 			const ExfatVolume& v = scanned->volume;
 			return from(std::move(*scanned), filesystem, with_label(std::format("exFAT, {} byte clusters, {} clusters ({} free)", v.cluster_size, v.cluster_count, v.free_clusters), v.label));
+		}
+		case FileSystem::ntfs: {
+			auto scanned = scan_ntfs(volume, cancel);
+			if (!scanned)
+				return std::unexpected(scanned.error());
+			const NtfsVolume& v = scanned->volume;
+			return from(std::move(*scanned), filesystem, with_label(std::format("NTFS {}.{}, {} byte clusters, {} clusters ({} free), {} MFT records", v.major_version, v.minor_version,
+				v.cluster_size, v.cluster_count, v.free_clusters, v.records), v.label));
 		}
 		default:
 			return fail(Errc::unsupported, "scanning a volume: fenrir can't read this filesystem's records yet");

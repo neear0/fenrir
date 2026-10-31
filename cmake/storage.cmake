@@ -26,6 +26,7 @@ add_library(storage_core STATIC
     include/storage/recovery_candidate.h
     include/storage/fat32.h
     include/storage/exfat.h
+    include/storage/ntfs.h
     include/storage/filesystem.h
     include/storage/exporter.h
     include/storage/carving.h
@@ -42,6 +43,7 @@ add_library(storage_core STATIC
     src/fs/scan_volume.cpp
     src/fs/fat32/scan.cpp
     src/fs/exfat/scan.cpp
+    src/fs/ntfs/scan.cpp
     src/export/exporter.cpp
     src/carving/formats.h
     src/carving/carve.cpp

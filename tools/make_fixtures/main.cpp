@@ -1,5 +1,5 @@
-// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h, fat32.h, exfat.h and carving.h into dir, and
-// into dir/<name>_originals what each recoverable file in fat32.img, exfat.img and carve.img has to come back as,
+// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h, fat32.h, exfat.h, ntfs.h and carving.h into dir,
+// and into dir/<name>_originals what each recoverable file in fat32.img, exfat.img, ntfs.img and carve.img has to come back as,
 // at the path `fenrir-cli recover` gives it. run by ctest before the cli tests, it only ever writes into the build
 // directory it's given
 
@@ -9,6 +9,7 @@
 
 #include "carving.h"
 #include "exfat.h"
+#include "ntfs.h"
 #include "fat32.h"
 #include "fixtures.h"
 
@@ -67,6 +68,8 @@ int main(int argc, char** argv) {
 	originals("fat32_originals", fixtures::fat32_scenario().expected);
 	ok &= write(dir / "exfat.img", fixtures::exfat_disk());
 	originals("exfat_originals", fixtures::exfat_scenario().expected);
+	ok &= write(dir / "ntfs.img", fixtures::ntfs_disk());
+	originals("ntfs_originals", fixtures::ntfs_scenario().expected);
 
 	// the carved files `fenrir-cli recover --carved` must reproduce, under carved/ like it writes them. the ones the
 	// fat32 scan finds too are left out of a carve, and a fragmented jpeg's cut isn't known in advance

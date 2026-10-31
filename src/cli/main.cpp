@@ -41,8 +41,9 @@ namespace {
 			"  hex <image> [offset] [length]        show bytes from it, 512 from offset 0 unless told (0x for hex)\n"
 			"  hash <image>                         its SHA-256\n"
 			"  files <image> [--partition N] [--all] [--why]\n"
-			"                                       the deleted files on a FAT32 or exFAT volume, how recoverable each is\n"
-			"                                       and (--why) what that's based on. --all lists the live ones too\n"
+			"                                       the deleted files on a FAT32, exFAT or NTFS volume, how\n"
+			"                                       recoverable each one is and (--why) what that's based on.\n"
+			"                                       --all lists the live ones too\n"
 			"  carve <image> [--partition N] [--every-byte] [--why]\n"
 			"                                       files found by their content alone (JPEG, PNG, PDF, ZIP and what\n"
 			"                                       a zip can be: DOCX, ODT, JAR...) on the whole image, or one\n"
@@ -299,7 +300,7 @@ namespace {
 			if (number)
 				std::println(stderr, "error: there's no partition {}, `fenrir-cli partitions` lists them", *number);
 			else
-				std::println(stderr, "error: no partition looks like a FAT32 or exFAT one, pick one with --partition N");
+				std::println(stderr, "error: no partition looks like a FAT32, exFAT or NTFS one, pick one with --partition N");
 			return std::nullopt;
 		}
 		return volume;
@@ -307,7 +308,7 @@ namespace {
 
 	std::optional<storage::VolumeScan> scan_volume(t_volume& volume) {
 		if (!storage::can_scan(volume.filesystem)) {
-			std::println(stderr, "error: {} looks like {}, fenrir can't read its records (FAT32 and exFAT only so far)", volume.where, storage::to_string(volume.filesystem));
+			std::println(stderr, "error: {} looks like {}, fenrir can't read its records (FAT32, exFAT and NTFS only so far)", volume.where, storage::to_string(volume.filesystem));
 			return std::nullopt;
 		}
 		auto scanned = storage::scan_volume(*volume.source, volume.filesystem);

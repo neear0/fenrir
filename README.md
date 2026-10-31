@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P4
+## Status: P5
 
 | | |
 |---|---|
@@ -23,15 +23,16 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Export of recovered files to a separate folder, with SHA-256 | done, tested |
 | `fenrir-cli info / partitions / hex / hash / files / carve / recover` | done, tested |
 | UI shell: Home / Recover / Images / Erase / Reports / Settings | done |
-| Recovery in the window: open an image, scan it on a worker thread (FAT32 and exFAT, then the deep scan) with progress, stop and go on, filter, see why each file has its status and its first bytes, export with a report | done, the engine side unit tested, the window tried by hand on the test disk |
+| Recovery in the window: open an image, scan it on a worker thread (FAT32, exFAT and NTFS, then the deep scan) with progress, stop and go on, filter, see why each file has its status and its first bytes, export with a report | done, the engine side unit tested, the window tried by hand on the test disk |
 | 100,000 made up files, to try the list at a size scans rarely reach | done, one click away on Recover |
-| NTFS | not yet (P5) |
+| NTFS: every MFT record (update sequences checked), resident and non-resident data, files in pieces, sparse files, alternate data streams, extension records, the tree rebuilt from parent references with $OrphanFiles for what's lost its directory, $MFTMirr and the backup boot sector | done, tested on a synthetic volume |
+| NTFS compressed and EFS-encrypted files | listed, said to be unsupported, not exported |
 | Picture previews | not yet |
 | Erasure | not in this build, no code here can write to a drive |
 
 ### The window
 
-**Recover → Open an image...** (or `fenrir.exe disk.img`, or *Open with*) opens a raw disk image read-only and scans it: the partition table, every FAT32 and exFAT volume's directories, then, with **Deep scan** on, the whole image for files by their content. Files show up while it runs, **Stop** stops it, and a stopped deep scan can **go on** from where it was. Pick a file to see where it was found, why it has its status, and its first bytes. **Choose where to export**, then export what the filters show or the picked file: files a filesystem still lists keep their names under a folder per partition, carved ones go under `carved/`, and `fenrir report.txt` lists every file with its status, SHA-256 and reasons. **Images** shows the partition table and everything the scan noticed, **Reports** the last export.
+**Recover → Open an image...** (or `fenrir.exe disk.img`, or *Open with*) opens a raw disk image read-only and scans it: the partition table, every FAT32, exFAT and NTFS volume's records, then, with **Deep scan** on, the whole image for files by their content. Files show up while it runs, **Stop** stops it, and a stopped deep scan can **go on** from where it was. Pick a file to see where it was found, why it has its status, and its first bytes. **Choose where to export**, then export what the filters show or the picked file: files a filesystem still lists keep their names under a folder per partition, carved ones go under `carved/`, and `fenrir report.txt` lists every file with its status, SHA-256 and reasons. **Images** shows the partition table and everything the scan noticed, **Reports** the last export.
 
 Everything that reads the image or writes a file runs in `storage::RecoverySession`, on its own threads: the window only draws snapshots of it and asks it to start and stop things.
 
@@ -42,7 +43,7 @@ fenrir-cli partitions disk.img               the partition table and anything wr
 fenrir-cli partitions disk.img --sector-size 4096
 fenrir-cli hex disk.img 0x1be 64             bytes at an offset, 512 from 0 by default
 fenrir-cli hash disk.img                     sha-256, compare it before and after anything you do
-fenrir-cli files disk.img --why              deleted files on the first FAT32 or exFAT partition, and why each is rated as it is
+fenrir-cli files disk.img --why              deleted files on the first FAT32, exFAT or NTFS partition, and why each is rated as it is
 fenrir-cli files disk.img --all --partition 2  every file, live ones too, on partition 2
 fenrir-cli recover disk.img D:\recovered     copy out every deleted file that can be, or --id N for some
 fenrir-cli carve disk.img --why              files found by their content alone, and what each rating is based on
@@ -74,6 +75,17 @@ exFAT keeps more of a deleted file than FAT32 does. Deleting clears an in-use bi
 - only the bytes up to a file's *valid data length* were ever written, the rest of it reads as zeros and is exported as zeros, whatever its clusters hold now.
 
 Each file's entries carry a checksum. A deleted file whose entries no longer match it had some of them written over by a newer file, so it's left out (and counted under the volume's notes) rather than listed with a name or size that may be someone else's.
+
+### How recoverable a deleted NTFS file is
+
+NTFS keeps the most. Every file has a record in the master file table (MFT) holding its names, times, parent directory and the *data runs* that say which clusters each piece of it is in. Deleting a file clears the record's in-use flag and frees its clusters in `$Bitmap`, and the record stays as it was until a new file takes it. So for a deleted file whose record is still there, where its data was is known exactly, however many pieces it was in, and what decides how much of it is left is whether those clusters are still free:
+
+- **intact**: every cluster its runs name is free. Small files whose data fits in the record itself (*resident* data) are intact as long as the record is;
+- **partial**: a cluster in its runs is in use again, it's exported up to there;
+- **unrecoverable**: its first cluster is in use again. Compressed files (NTFS compression) and EFS-encrypted ones are listed as unrecoverable too, saying why: fenrir doesn't decompress them yet, and nothing can read EFS data without its user's key;
+- **uncertain**: another deleted file claims the same clusters.
+
+Sparse parts of a file and the bytes past its *initialized size* are exported as zeros, which is what they read as. Alternate data streams (`download.exe:Zone.Identifier`) are listed as their own files next to theirs. The directory tree is rebuilt from each record's parent reference, not from the directories' indexes, which drop deleted files: a deleted file in a deleted directory still has its path. When the directory's own record has been reused for something else, there's nothing left that says where the file was, so it's listed under `$OrphanFiles` (as The Sleuth Kit does). Records whose update sequence doesn't check out were torn mid-write or are damaged, they're left out and counted. NTFS keeps times in UTC, FAT and exFAT in the local time of whoever wrote them.
 
 ### How a carved file is rated
 
@@ -121,7 +133,7 @@ What it builds, in `build/vs2022/<Debug|Release>/`:
 | `storage_tests` | `tests/.../storage_tests.exe` | doctest unit tests |
 | `make_fixtures` | `tests/.../fenrir-make-fixtures.exe` | writes the test disk images, run by CTest |
 
-CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals` and `cli_recover_exfat_matches_originals` recover the deleted files from the FAT32 and exFAT test images and check each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk. The session's unit tests run its real threads on an image file: a scan, an export and its report, a preview, a deep scan stopped and gone on with.
+CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals`, `cli_recover_exfat_matches_originals` and `cli_recover_ntfs_matches_originals` recover the deleted files from the FAT32, exFAT and NTFS test images and check each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk. The session's unit tests run its real threads on an image file: a scan, an export and its report, a preview, a deep scan stopped and gone on with.
 
 ## Layout
 
@@ -133,6 +145,7 @@ src/partition/     MBR and GPT
 src/fs/            what the filesystem scanners share, and scan_volume(), which picks one
 src/fs/fat32/      the FAT32 scanner
 src/fs/exfat/      the exFAT scanner
+src/fs/ntfs/       the NTFS scanner
 src/carving/       the signature scan and a validator per format
 src/export/        the exporter and the export report, the only code in the engine that writes
 src/session/       a recovery session: scans and exports on worker threads, read as snapshots
@@ -161,9 +174,10 @@ cmake/             fenrir's targets
 - The UI keeps the DPI scale of the monitor it opened on (a CelosUI limitation).
 - The results list places rows at float positions, so past roughly 600,000 rows they start to land between pixels.
 - Fenrir's own license hasn't been chosen yet. `LICENSE.txt` is the MIT text inherited from the CelosUI fork (Dear ImGui's). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- The test disk images are built by Fenrir's own generator (`tools/make_fixtures`) from the MBR convention and the UEFI spec, independently of the parser's code, but they haven't been cross-checked against images made by other tools (diskpart, sgdisk, fdisk) yet. Likewise the FAT32 and exFAT volumes are built from Microsoft's specifications, and haven't been compared with what Windows' own format writes, or read with TestDisk or The Sleuth Kit. The JPEGs, PNGs and ZIPs it writes for carving were checked once by hand with Windows' own decoders (GDI+ and .NET's ZipFile), the PDFs weren't.
+- The test disk images are built by Fenrir's own generator (`tools/make_fixtures`) from the MBR convention and the UEFI spec, independently of the parser's code, but they haven't been cross-checked against images made by other tools (diskpart, sgdisk, fdisk) yet. Likewise the FAT32, exFAT and NTFS volumes are built from Microsoft's specifications (and for NTFS, the linux-ntfs documentation), and haven't been compared with what Windows' own format writes, or read with TestDisk or The Sleuth Kit. That comparison is the plan's last condition for P5, and it's still open. The JPEGs, PNGs and ZIPs it writes for carving were checked once by hand with Windows' own decoders (GDI+ and .NET's ZipFile), the PDFs weren't.
 - Hostile tables are tested with random damage in the unit tests, not with a real fuzzer (libFuzzer needs clang-cl, not set up yet).
 - C++23 on Linux needs GCC 14 or Clang 18 with libc++ / libstdc++ 14 (`<print>`); that's untested.
 - FAT32 gaps: 8.3 names with characters past ASCII (an OEM code page the volume doesn't name) show U+FFFD; only the first cluster of a deleted directory is read; exported files don't get their original timestamps back; on volumes with more than 65,535 clusters a deleted file whose first cluster's high half is 0 is rated uncertain, since Windows clears it on delete. The test volume has fewer clusters than Microsoft's FAT32 minimum (65,525), which Fenrir notes and reads anyway.
 - exFAT gaps: names aren't checked against their name hash (that needs the volume's up-case table), times are the local time they were written in (their UTC offset isn't applied), and on a TexFAT volume only the FAT and bitmap in use are read. A deleted directory is read as far as its clusters are free.
+- NTFS gaps: compressed files aren't decompressed and EFS files can't be read (both listed, not exported). $LogFile and $UsnJrnl aren't read, nor are the leftovers of deleted entries in directory indexes, so a file whose MFT record was reused is gone from the listing (carving can still find its content). A file with several hard links is listed once, under its first name. Only the first 4 million MFT records are read. Paths come from the directories as they are now: if a directory was moved after a file in it was deleted, the file shows up at the directory's new place.
 - Carving gaps: a fragmented file only comes back up to its first gap, the rest isn't searched for. Nothing is decompressed, so compressed ZIP entries, PDF cross-reference streams and progressive JPEGs' image data aren't checked inside. Files inside other files (a JPEG in a ZIP) aren't found on their own, and by default nor is anything that doesn't start at a sector. Only four formats so far; video, audio, RAW photos and Office's older formats aren't carved.

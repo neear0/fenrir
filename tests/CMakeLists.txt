@@ -16,6 +16,7 @@ add_executable(storage_tests
     unit/test_partitions.cpp
     unit/test_fat32.cpp
     unit/test_exfat.cpp
+    unit/test_ntfs.cpp
     unit/test_carving.cpp
     unit/test_session.cpp
 )
@@ -40,6 +41,7 @@ set_tests_properties(cli_refuses_missing_image PROPERTIES WILL_FAIL TRUE)
 # the disk images from tools/make_fixtures/fixtures.h, written before the cli tests that read them
 add_executable(make_fixtures ${PROJECT_SOURCE_DIR}/tools/make_fixtures/main.cpp ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fixtures.h ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fat32.h
     ${PROJECT_SOURCE_DIR}/tools/make_fixtures/exfat.h
+    ${PROJECT_SOURCE_DIR}/tools/make_fixtures/ntfs.h
     ${PROJECT_SOURCE_DIR}/tools/make_fixtures/carving.h)
 set_target_properties(make_fixtures PROPERTIES OUTPUT_NAME fenrir-make-fixtures)
 fenrir_warnings(make_fixtures)
@@ -95,6 +97,15 @@ add_test(NAME cli_recover_exfat_matches_originals
     COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/exfat.img -DORIGINALS=${images}/exfat_originals
         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/recovered_exfat -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
 set_tests_properties(cli_recover_exfat_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
+
+# ntfs: the listing, and the deleted files recovered and compared with their originals. a deleted file's record still
+# says where every piece of it was
+cli_test(files_ntfs "files;${images}/ntfs.img;--why"
+    "volume: +partition 1, NTFS 3[.]1, 4096 byte clusters.*label FENRIR NT\n.*intact +15000 +deleted +/fragmented.bin\n.*each of its 3 pieces.*\n.*partial +15000 +deleted +/interrupted.bin\n.*intact +2000 +deleted +/[$]OrphanFiles/lost.txt\n")
+add_test(NAME cli_recover_ntfs_matches_originals
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/ntfs.img -DORIGINALS=${images}/ntfs_originals
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/recovered_ntfs -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
+set_tests_properties(cli_recover_ntfs_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
 
 # carving: the listing, and the carved files recovered and compared with their originals
 cli_test(carve "carve;${images}/carve.img;--why"

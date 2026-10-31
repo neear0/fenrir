@@ -10,7 +10,7 @@
 // this frame draws. pages only read snapshots and ask the session to start or stop things, which returns at once: no
 // page ever reads the image or writes a file on the render thread
 namespace fenrir::app {
-	inline constexpr const char* build_stage = "P4"; // the milestone this build is at, in the titlebar
+	inline constexpr const char* build_stage = "P5"; // the milestone this build is at, in the titlebar
 
 	storage::RecoverySession& session();
 	const storage::SessionSnapshot& now(); // the same snapshot for every page drawn in a frame
