@@ -39,7 +39,7 @@ namespace storage {
 	};
 
 	struct RecoveryCandidate {
-		static constexpr std::uint64_t no_parent = std::numeric_limits<std::uint64_t>::max();
+		static constexpr std::uint64_t no_parent = (std::numeric_limits<std::uint64_t>::max)(); // in brackets: windows.h may define max
 
 		std::uint64_t id = 0;            // the same for the same volume scanned again: its place in the scan's order
 		std::uint64_t parent = no_parent; // the id of the directory it's in

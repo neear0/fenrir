@@ -39,16 +39,22 @@ foreach(source ${sources})
     endforeach()
 endforeach()
 
-# and the exporter has to open its files with noreplace, so it can't ever replace one
+# and the exporter has to open its files with noreplace, so it can't ever replace one: every open() says so, and no
+# ofstream opens a file in its constructor, where it couldn't
 file(GLOB export_sources ${export_dir}*.cpp)
 foreach(source ${export_sources})
+    file(RELATIVE_PATH relative ${ROOT} ${source})
     file(READ ${source} text)
-    string(FIND "${text}" "ofstream" opens)
-    string(FIND "${text}" "noreplace" safe)
-    if(NOT opens EQUAL -1 AND safe EQUAL -1)
-        file(RELATIVE_PATH relative ${ROOT} ${source})
-        list(APPEND found "${relative}: ofstream without noreplace")
-    endif()
+    string(REPLACE ";" "," text "${text}") # c++ is full of them, and they'd split the lines apart
+    string(REPLACE "\n" ";" lines "${text}")
+    foreach(line IN LISTS lines)
+        if(line MATCHES "[.]open[(]" AND NOT line MATCHES "ios::noreplace")
+            list(APPEND found "${relative}: an open() without noreplace: ${line}")
+        endif()
+        if(line MATCHES "ofstream [A-Za-z_]+[({]")
+            list(APPEND found "${relative}: an ofstream opened by its constructor: ${line}")
+        endif()
+    endforeach()
 endforeach()
 
 list(LENGTH sources count)

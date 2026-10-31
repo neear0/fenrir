@@ -33,16 +33,23 @@ namespace storage {
 		std::size_t chunk_size = std::size_t(4) << 20; // read at a time, at least 4096
 		std::uint64_t max_file_size = std::uint64_t(1) << 30; // a file isn't followed further than this
 		std::vector<FileType> types;                   // empty: all of them
+
+		// only files that start in [from, to) are looked for, a file found is still followed past to. a carve in
+		// slices goes on from the last one's CarveScan::next, and finds what one carve of everything would
+		std::uint64_t from = 0;
+		std::uint64_t to = UINT64_MAX;
 	};
 
 	struct CarveScan {
 		std::vector<RecoveryCandidate> candidates; // in the order they're on the source, ids are indexes into this
 		std::vector<Diagnostic> diagnostics;
 		std::uint64_t rejected = 0; // signatures whose structure didn't hold up: false matches, or too little left
+		std::uint64_t next = 0;     // where a carve of what comes after should start: to, or past the last file if it goes on
 	};
 
 	// every file of the chosen types in source. after a file is found the search goes on past its end, so what's
-	// inside one isn't found again. invalid options: invalid_argument. unreadable parts are diagnostics, the scan goes on
+	// inside one isn't found again. invalid options: invalid_argument. unreadable parts are diagnostics, the scan goes on.
+	// progress counts the bytes from `from` to `to` (or the end)
 	Result<CarveScan> carve(IBlockSource& source, const CarveOptions& options = {}, const CancellationToken* cancel = nullptr,
 		ProgressSink* progress = nullptr) noexcept;
 

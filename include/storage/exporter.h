@@ -33,4 +33,8 @@ namespace storage {
 	// reserved characters, no "." or "..", no device names (CON, NUL, COM1...), no trailing dots or spaces, at most 200
 	// bytes. utf-8 in and out
 	std::string safe_name(std::string_view name);
+
+	// text as a new file in destination, called name (made safe), or "name (2)" and up when that's taken: an export's
+	// report. it never replaces a file either
+	Result<std::filesystem::path> write_report(const std::filesystem::path& destination, std::string_view name, std::string_view text) noexcept;
 }

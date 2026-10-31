@@ -1,4 +1,5 @@
 #include "../../ui.h"
+#include "app.h"
 #include "screens.h"
 
 // the shell around fenrir's pages, drawn with CelosUI's effects and animations:
@@ -231,7 +232,8 @@ void fenrir::shell::titlebar() {
 
     // what this build is, right of it, left of the window's buttons
     float x = ui::size.x - px(46.f) * 2.f - px(12.f);
-    const char* chips[] = { "P0 build", "Read-only" };
+    const std::string stage = std::string(fenrir::app::build_stage) + " build";
+    const char* chips[] = { stage.c_str(), "Read-only" };
     for (int i = 0; i < 2; i++) {
         const bool lock = i == 1;
         const ImVec2 size = pill_size(chips[i], lock);

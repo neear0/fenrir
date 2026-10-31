@@ -351,6 +351,11 @@ static ImVec2 region_max(const t_surface* s) { // the bottom right of where cont
 
 ImVec2 celosia::core::available() { return region_max(stack.back()) - stack.back()->cursor; }
 float celosia::core::item_width() { return IM_TRUNC(stack.back()->item_width); }
+float celosia::core::set_item_width(float width) {
+	const float was = stack.back()->item_width;
+	stack.back()->item_width = width;
+	return was;
+}
 float celosia::core::line_end() { return stack.back()->work.Max.x; }
 float celosia::core::text_offset() { return stack.back()->line_text_offset; }
 

@@ -1,6 +1,7 @@
 #include "ui/ui.h"
+#include "ui/render/screens/app.h"
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
     // dlls loaded at runtime only come from system32, never from next to the executable or the working directory
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -23,6 +24,7 @@ int main() {
         fonts::add("caps", { font_data::poppins_bold, font_data::poppins_bold_size, 10.5f });
     }
     celosia::initialize::images();
+    fenrir::app::open_argument(argc, argv); // fenrir.exe disk.img, "open with" and dropping an image on it
 
     while (celosia::platform::poll())
     {

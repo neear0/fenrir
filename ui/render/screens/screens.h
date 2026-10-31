@@ -4,7 +4,7 @@
 
 // fenrir's pages and the shell around them. render::main_window() draws the shell and the open page, each page fills the
 // space right of the sidebar with render::groupbox's. none of them reads or writes storage on the render thread: the
-// recovery list is mock data until the scans run on workers (milestone P4), and nothing in this build can write to a drive
+// recovery session (app.h) does that on its own threads, and nothing in this build can write to a drive
 namespace fenrir::screens {
 	void home();
 	void recover();
@@ -26,7 +26,7 @@ namespace fenrir::screens {
 	// the sidebar's order, ctrl+1 to ctrl+6 go to them in it
 	inline constexpr t_page pages[] = {
 		{ "Home", "Overview", nullptr, nullptr, icons::e_icon::home, false, home },
-		{ "Recover", "Deleted files", "Recovery", "mock", icons::e_icon::recover, false, recover },
+		{ "Recover", "Deleted and carved files", "Recovery", nullptr, icons::e_icon::recover, false, recover },
 		{ "Images", "Read-only disk images", nullptr, nullptr, icons::e_icon::images, false, images },
 		{ "Erase", "Not in this build", "Erasure", "P7", icons::e_icon::erase, false, erase },
 		{ "Reports", "Local logs", "Records", nullptr, icons::e_icon::reports, false, reports },

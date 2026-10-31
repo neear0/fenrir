@@ -1,4 +1,5 @@
 #include "../ui.h"
+#include "screens/app.h"
 #include "screens/screens.h"
 
 // fenrir's window: CelosUI's background and grain, fenrir's shell (screens/shell.cpp) and the open page from screens/
@@ -17,6 +18,7 @@ void celosia::render::main_window() {
             base, ImColor(main.x, main.y, main.z, 0.55f), ImColor(accent.x, accent.y, accent.z, 0.45f), (float)style::general::rounding_window);
     }
     effects::noise(drawlist, pos, pos + celosia::ui::size, style::window::noise, (float)style::general::rounding_window);
+    fenrir::app::frame(); // this frame's snapshot of the session, for every page
     fenrir::shell::sidebar(); // before the titlebar, so the keyboard starts on the pages
     fenrir::shell::titlebar();
 

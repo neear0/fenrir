@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P3
+## Status: P4
 
 | | |
 |---|---|
@@ -22,10 +22,16 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Export of recovered files to a separate folder, with SHA-256 | done, tested |
 | `fenrir-cli info / partitions / hex / hash / files / carve / recover` | done, tested |
 | UI shell: Home / Recover / Images / Erase / Reports / Settings | done |
-| Recover page | **mock data**: a virtualized list of 100,000 made up candidates |
-| Opening images from the UI | not yet (P4) |
-| Previewing carved files, NTFS, exFAT | not yet (P4, P5) |
+| Recovery in the window: open an image, scan it on a worker thread (FAT32, then the deep scan) with progress, stop and go on, filter, see why each file has its status and its first bytes, export with a report | done, the engine side unit tested, the window tried by hand on the test disk |
+| 100,000 made up files, to try the list at a size scans rarely reach | done, one click away on Recover |
+| Picture previews, NTFS, exFAT | not yet (P5) |
 | Erasure | not in this build, no code here can write to a drive |
+
+### The window
+
+**Recover → Open an image...** (or `fenrir.exe disk.img`, or *Open with*) opens a raw disk image read-only and scans it: the partition table, every FAT32 volume's directories, then, with **Deep scan** on, the whole image for files by their content. Files show up while it runs, **Stop** stops it, and a stopped deep scan can **go on** from where it was. Pick a file to see where it was found, why it has its status, and its first bytes. **Choose where to export**, then export what the filters show or the picked file: FAT32 files keep their names under a folder per partition, carved ones go under `carved/`, and `fenrir report.txt` lists every file with its status, SHA-256 and reasons. **Images** shows the partition table and everything the scan noticed, **Reports** the last export.
+
+Everything that reads the image or writes a file runs in `storage::RecoverySession`, on its own threads: the window only draws snapshots of it and asks it to start and stop things.
 
 ### The command line
 
@@ -101,7 +107,7 @@ What it builds, in `build/vs2022/<Debug|Release>/`:
 | `storage_tests` | `tests/.../storage_tests.exe` | doctest unit tests |
 | `make_fixtures` | `tests/.../fenrir-make-fixtures.exe` | writes the test disk images, run by CTest |
 
-CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals` recovers the deleted files from the FAT32 test image and checks each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk.
+CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals` recovers the deleted files from the FAT32 test image and checks each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk. The session's unit tests run its real threads on an image file: a scan, an export and its report, a preview, a deep scan stopped and gone on with.
 
 ## Layout
 
@@ -112,7 +118,8 @@ src/io/            block sources: image files, fault injection; read-only device
 src/partition/     MBR and GPT
 src/fs/fat32/      the FAT32 scanner
 src/carving/       the signature scan and a validator per format
-src/export/        the exporter, the only code in the engine that writes
+src/export/        the exporter and the export report, the only code in the engine that writes
+src/session/       a recovery session: scans and exports on worker threads, read as snapshots
 src/cli/           fenrir-cli
 tests/             unit tests, cli tests and the write-API check
 tools/             the test disk image generator
@@ -131,7 +138,10 @@ cmake/             fenrir's targets
 ## Known gaps
 
 - Only the Windows build (Win32 + D3D11) has been built and tested here. The POSIX image reader and the GLFW + Vulkan build haven't been compiled in this repo yet.
-- Keyboard navigation works, but there's no screen reader / UI Automation support.
+- Keyboard navigation works, but there's no screen reader / UI Automation support, so the window isn't usable without sight yet. `fenrir-cli` does everything the window does, as text.
+- The window is always on top of other windows, as CelosUI's demo was, which gets in the way of looking at exported files next to it.
+- The window opens images through the Windows file dialog. The GLFW build has none yet (CelosUI has no text field to type a path into), it can only use `fenrir.exe disk.img`.
+- There's no search in the results list (it needs that text field too), only the status and found-by filters. The preview is the first 256 bytes in hex: showing pictures means decoding untrusted data, which should happen in a sandboxed process, not in the window.
 - The UI keeps the DPI scale of the monitor it opened on (a CelosUI limitation).
 - The results list places rows at float positions, so past roughly 600,000 rows they start to land between pixels.
 - Fenrir's own license hasn't been chosen yet. `LICENSE.txt` is the MIT text inherited from the CelosUI fork (Dear ImGui's). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

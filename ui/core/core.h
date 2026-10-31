@@ -30,6 +30,7 @@ namespace celosia::core {
 	void same_line(float spacing = -1.f); // spacing -1 is style::general::spacing.x
 	ImVec2 available();  // from the cursor to the right and bottom of the surface's content
 	float item_width();  // how wide a frame is by default, 65% of the surface's width
+	float set_item_width(float width); // for the items after it in this surface, until it's set back: returns what it was
 	float line_end();    // where the surface's content ends on the right
 	float text_offset(); // how far under the cursor the text of the items on this line sits, text after them lines up with it
 	ImVec2 item_size(ImVec2 size, float default_w, float default_h); // a 0 takes the default, a negative is that far from the content's right or bottom

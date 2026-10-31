@@ -64,13 +64,13 @@ namespace storage {
 
 	// a + b and a * b, or nothing when the result doesn't fit in 64 bits
 	constexpr std::optional<std::uint64_t> checked_add(std::uint64_t a, std::uint64_t b) noexcept {
-		if (a > std::numeric_limits<std::uint64_t>::max() - b)
+		if (a > (std::numeric_limits<std::uint64_t>::max)() - b)
 			return std::nullopt;
 		return a + b;
 	}
 
 	constexpr std::optional<std::uint64_t> checked_mul(std::uint64_t a, std::uint64_t b) noexcept {
-		if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a)
+		if (a != 0 && b > (std::numeric_limits<std::uint64_t>::max)() / a)
 			return std::nullopt;
 		return a * b;
 	}

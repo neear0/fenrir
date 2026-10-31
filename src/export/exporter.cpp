@@ -59,6 +59,25 @@ namespace {
 		}
 	};
 
+	// a new file in dir called name, never an existing one: noreplace fails if the name's taken, then "name (2).ext" and
+	// up are tried. out is left open on it and guard set to remove it, busy when every name's taken
+	Result<void> create_new(std::ofstream& out, t_file_guard& guard, const fs::path& dir, const std::string& name) {
+		const std::string stem = to_utf8(from_utf8(name).stem()), extension = to_utf8(from_utf8(name).extension());
+		std::error_code error;
+		for (int n = 1; n <= max_duplicates; n++) {
+			const fs::path path = dir / from_utf8(n == 1 ? name : cut_utf8(stem, max_name_bytes) + " (" + std::to_string(n) + ")" + extension);
+			out.open(path, std::ios::binary | std::ios::out | std::ios::noreplace);
+			if (out.is_open()) {
+				guard.path = path;
+				return {};
+			}
+			out.clear();
+			if (!fs::exists(path, error))
+				return fail(Errc::io_error, "creating a file");
+		}
+		return fail(Errc::busy, "creating a file");
+	}
+
 	Result<ExportedFile> export_one(IBlockSource& volume, const RecoveryCandidate& candidate, const fs::path& destination, const CancellationToken* cancel, ProgressSink* progress) {
 		if (destination.empty())
 			return fail(Errc::invalid_argument, "exporting: no destination");
@@ -101,26 +120,11 @@ namespace {
 		if (!error && space.available < candidate.recoverable_bytes)
 			return fail(Errc::no_space, "exporting");
 
-		// a new file, never an existing one: noreplace fails if the name's taken, then the next name is tried
 		const bool partial = candidate.integrity == Integrity::partial || candidate.recoverable_bytes < candidate.size;
-		const std::string name = to_utf8(target.filename()) + (partial ? ".partial" : "");
-		const fs::path dot = from_utf8(name).extension();
-		const std::string stem = to_utf8(from_utf8(name).stem()), extension = to_utf8(dot);
 		t_file_guard guard; // before out, so the file's closed by the time the guard removes it
 		std::ofstream out;
-		for (int n = 1; n <= max_duplicates; n++) {
-			const fs::path path = target.parent_path() / from_utf8(n == 1 ? name : cut_utf8(stem, max_name_bytes) + " (" + std::to_string(n) + ")" + extension);
-			out.open(path, std::ios::binary | std::ios::out | std::ios::noreplace);
-			if (out.is_open()) {
-				guard.path = path;
-				break;
-			}
-			out.clear();
-			if (!fs::exists(path, error))
-				return fail(Errc::io_error, "exporting: creating the file");
-		}
-		if (!out.is_open())
-			return fail(Errc::busy, "exporting: every name for it is taken");
+		if (Result<void> created = create_new(out, guard, target.parent_path(), to_utf8(target.filename()) + (partial ? ".partial" : "")); !created)
+			return created.error().code == Errc::busy ? fail(Errc::busy, "exporting: every name for it is taken") : fail(Errc::io_error, "exporting: creating the file");
 
 		std::unique_ptr<std::byte[]> buffer(new std::byte[piece]);
 		Sha256 hasher;
@@ -179,5 +183,30 @@ storage::Result<storage::ExportedFile> storage::export_candidate(IBlockSource& v
 		return fail(Errc::out_of_memory, "exporting");
 	} catch (const std::filesystem::filesystem_error& e) {
 		return fail(Errc::io_error, "exporting", static_cast<std::uint32_t>(e.code().value()));
+	}
+}
+
+storage::Result<std::filesystem::path> storage::write_report(const std::filesystem::path& destination, std::string_view name, std::string_view text) noexcept {
+	try {
+		if (destination.empty() || is_device_path(destination))
+			return fail(Errc::invalid_argument, "writing the report: the destination isn't a directory");
+		std::error_code error;
+		fs::create_directories(destination, error);
+		if (error)
+			return fail(Errc::io_error, "writing the report: creating its directory", static_cast<std::uint32_t>(error.value()));
+		t_file_guard guard;
+		std::ofstream out;
+		if (Result<void> created = create_new(out, guard, destination, safe_name(name)); !created)
+			return fail(created.error().code, "writing the report");
+		out.write(text.data(), static_cast<std::streamsize>(text.size()));
+		out.close();
+		if (!out)
+			return fail(Errc::io_error, "writing the report");
+		guard.keep = true;
+		return guard.path;
+	} catch (const std::bad_alloc&) {
+		return fail(Errc::out_of_memory, "writing the report");
+	} catch (const std::filesystem::filesystem_error& e) {
+		return fail(Errc::io_error, "writing the report", static_cast<std::uint32_t>(e.code().value()));
 	}
 }

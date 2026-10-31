@@ -129,6 +129,8 @@ set(celos_ui_sources
     ui/render/screens/erase.cpp
     ui/render/screens/reports.cpp
     ui/render/screens/settings.cpp
+    ui/render/screens/app.h
+    ui/render/screens/app.cpp
 )
 
 if(CELOSUI_PLATFORM STREQUAL "win32")
@@ -142,6 +144,7 @@ if(CELOSUI_PLATFORM STREQUAL "win32")
         ui/win32/platform_win32.cpp
         ui/win32/window_effects.cpp
         ui/win32/window_functions.cpp
+        ui/render/screens/dialogs_win32.cpp
     )
     set(backend_sources
         external/imgui/dx11/imgui_impl_dx11.cpp
@@ -186,6 +189,7 @@ elseif(CELOSUI_PLATFORM STREQUAL "glfw")
         ui/glfw/platform_glfw.cpp
         ui/glfw/textures_vulkan.cpp
         ui/glfw/vulkan_create.cpp
+        ui/render/screens/dialogs_glfw.cpp
     )
     set(backend_sources
         external/imgui/vulkan/imgui_impl_vulkan.cpp

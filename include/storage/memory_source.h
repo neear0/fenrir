@@ -17,7 +17,7 @@ namespace storage {
 			if (offset > bytes_.size())
 				return fail(Errc::out_of_range, "reading memory: the offset is past its end");
 			const std::size_t at = static_cast<std::size_t>(offset);
-			const std::size_t count = std::min(output.size(), bytes_.size() - at);
+			const std::size_t count = (std::min)(output.size(), bytes_.size() - at); // (std::min): windows.h may define min
 			std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(at), count, output.begin());
 			return count;
 		}

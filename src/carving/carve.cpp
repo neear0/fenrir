@@ -61,11 +61,13 @@ namespace {
 			const std::size_t chunk = static_cast<std::size_t>(align_up(options_.chunk_size, a));
 			std::unique_ptr<std::byte[]> buffer(new std::byte[chunk + overlap]);
 
-			std::uint64_t resume = 0;
-			for (std::uint64_t chunk_at = 0; chunk_at < size; chunk_at += chunk) {
+			const std::uint64_t first = align_up(std::min(options_.from, size), a), end = std::min(options_.to, size);
+			std::uint64_t resume = first;
+			scan_.next = std::max(first, end);
+			for (std::uint64_t chunk_at = first; chunk_at < end; chunk_at += chunk) {
 				if (cancel && cancel->cancelled())
 					return fail(Errc::cancelled, "carving");
-				const std::uint64_t positions_end = std::min<std::uint64_t>(chunk_at + chunk, size);
+				const std::uint64_t positions_end = std::min<std::uint64_t>(chunk_at + chunk, end);
 				if (resume < positions_end) { // else the file found last goes past this chunk, nothing in it is looked at
 					const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(chunk + overlap, size - chunk_at));
 					fill(chunk_at, { buffer.get(), n });
@@ -76,16 +78,18 @@ namespace {
 						const std::uint64_t next = check(p, { buffer.get() + at, n - at }, size);
 						if (scan_.candidates.size() >= max_candidates) {
 							note(Diagnostic::Severity::warning, std::format("the carver stopped at byte {}: it found {} files, as many as it keeps", p, max_candidates));
+							scan_.next = std::max(next, p + 1);
 							return std::move(scan_);
 						}
 						if (next > p) {
 							resume = next;
+							scan_.next = std::max(scan_.next, next);
 							p = next - a; // the loop adds a back
 						}
 					}
 				}
 				if (progress)
-					progress->progress(positions_end, size);
+					progress->progress(positions_end - first, end - first);
 			}
 			for (const auto& [from, to] : unreadable_)
 				note(Diagnostic::Severity::warning, std::format("bytes {} to {} couldn't be read, nothing in them could be found", from, to - 1));
