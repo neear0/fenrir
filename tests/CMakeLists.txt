@@ -15,6 +15,7 @@ add_executable(storage_tests
     unit/test_sources.cpp
     unit/test_partitions.cpp
     unit/test_fat32.cpp
+    unit/test_carving.cpp
 )
 target_include_directories(storage_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_include_directories(storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools) # make_fixtures/fixtures.h
@@ -35,7 +36,8 @@ add_test(NAME cli_refuses_missing_image COMMAND storage_cli info ${CMAKE_CURRENT
 set_tests_properties(cli_refuses_missing_image PROPERTIES WILL_FAIL TRUE)
 
 # the disk images from tools/make_fixtures/fixtures.h, written before the cli tests that read them
-add_executable(make_fixtures ${PROJECT_SOURCE_DIR}/tools/make_fixtures/main.cpp ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fixtures.h ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fat32.h)
+add_executable(make_fixtures ${PROJECT_SOURCE_DIR}/tools/make_fixtures/main.cpp ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fixtures.h ${PROJECT_SOURCE_DIR}/tools/make_fixtures/fat32.h
+    ${PROJECT_SOURCE_DIR}/tools/make_fixtures/carving.h)
 set_target_properties(make_fixtures PROPERTIES OUTPUT_NAME fenrir-make-fixtures)
 fenrir_warnings(make_fixtures)
 set(images ${CMAKE_CURRENT_BINARY_DIR}/fixtures/images)
@@ -81,3 +83,13 @@ add_test(NAME cli_recover_matches_originals
     COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/fat32.img -DORIGINALS=${images}/fat32_originals
         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/recovered -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
 set_tests_properties(cli_recover_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
+
+# carving: the listing, and the carved files recovered and compared with their originals
+cli_test(carve "carve;${images}/carve.img;--why"
+    "carving: +the whole image, 12582912 bytes.*\n +0 +intact +10924 +JPEG +4191232 +00003ff400[.]jpg\n.*all 480 blocks of its image data decode.*\n +9 +intact +4849 +DOCX .*\n +10 +partial +8192 +JPEG .*\n.*\n14 files, and 2 more that the FAT32 scan of partition 1 finds.*\n5 signatures didn't hold up")
+cli_test(carve_partition "carve;${images}/carve.img;--partition;1" "carving: +partition 1, .*\n\n.*\n\n0 files, and 2 more that the FAT32 scan of partition 1 finds")
+cli_test(carve_rejects_a_fake_jpeg "carve;${images}/fat32.img" "\n0 files\n1 signature didn't hold up as files and was left out")
+add_test(NAME cli_recover_carved_matches_originals
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/carve.img -DORIGINALS=${images}/carve_originals
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/carved -DEXTRA=--carved -DMIN=12 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
+set_tests_properties(cli_recover_carved_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)

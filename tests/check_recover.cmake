@@ -1,12 +1,16 @@
-# the first meaningful demo, end to end: fenrir-cli recover copies the deleted files out of IMAGE into a fresh directory,
-# and every one of them has to hash (with cmake's sha-256, not fenrir's) the same as the original in ORIGINALS, which
-# fenrir-make-fixtures wrote from what it put on the volume. the image's hash and time can't change.
-# usage: cmake -DCLI=<fenrir-cli> -DIMAGE=<fat32.img> -DORIGINALS=<dir> -DOUT=<dir> -P check_recover.cmake
+# the first meaningful demo, end to end: fenrir-cli recover copies the deleted (or with EXTRA=--carved, carved) files
+# out of IMAGE into a fresh directory, and every one of them has to hash (with cmake's sha-256, not fenrir's) the same as
+# the original in ORIGINALS, which fenrir-make-fixtures wrote from what it put on the disk. the image's hash and time
+# can't change.
+# usage: cmake -DCLI=<fenrir-cli> -DIMAGE=<image> -DORIGINALS=<dir> -DOUT=<dir> [-DEXTRA=--carved] [-DMIN=n] -P check_recover.cmake
+if(NOT DEFINED MIN)
+    set(MIN 7)
+endif()
 file(REMOVE_RECURSE ${OUT})
 file(SHA256 ${IMAGE} image_before)
 file(TIMESTAMP ${IMAGE} time_before "%Y-%m-%dT%H:%M:%S")
 
-execute_process(COMMAND ${CLI} recover ${IMAGE} ${OUT} OUTPUT_VARIABLE output RESULT_VARIABLE result)
+execute_process(COMMAND ${CLI} recover ${IMAGE} ${OUT} ${EXTRA} OUTPUT_VARIABLE output RESULT_VARIABLE result)
 message(STATUS "${output}")
 if(NOT result EQUAL 0)
     message(FATAL_ERROR "fenrir-cli recover failed: ${result}")
@@ -14,7 +18,7 @@ endif()
 
 file(GLOB_RECURSE originals RELATIVE ${ORIGINALS} ${ORIGINALS}/*)
 list(LENGTH originals count)
-if(count LESS 7)
+if(count LESS MIN)
     message(FATAL_ERROR "only ${count} originals in ${ORIGINALS}")
 endif()
 foreach(name ${originals})

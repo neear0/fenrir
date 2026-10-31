@@ -18,6 +18,12 @@ namespace storage {
 	};
 	std::string_view to_string(Integrity integrity) noexcept;
 
+	// how it was found
+	enum class Origin : std::uint8_t {
+		filesystem, // a filesystem's own records: a directory entry, an mft record
+		carved,     // its content, with no record of it left: no name, no path, no dates
+	};
+
 	struct Extent {
 		std::uint64_t offset = 0; // bytes, from the start of the volume the scanner was given
 		std::uint64_t length = 0;
@@ -44,7 +50,7 @@ namespace storage {
 		bool directory = false;
 		bool name_damaged = false;       // part of the name was lost and has been replaced with _
 
-		std::uint64_t size = 0;              // what the directory entry says
+		std::uint64_t size = 0;              // what the directory entry says. carved: as far as its structure went
 		std::uint64_t recoverable_bytes = 0; // what an export writes: size, or less for partial ones
 		std::vector<Extent> extents;         // where the recoverable bytes are, in order
 		Integrity integrity = Integrity::unrecoverable;
@@ -53,6 +59,10 @@ namespace storage {
 		Timestamp modified, created, accessed;
 		std::uint32_t attributes = 0;   // the filesystem's own bits (fat: read-only 0x01, hidden 0x02, system 0x04, ...)
 		std::uint64_t first_cluster = 0;
-		std::uint64_t entry_offset = 0; // where its directory entry is in the volume, the evidence it came from
+		std::uint64_t entry_offset = 0; // the evidence it came from: where its directory entry is, or for a carved file
+		                                // where its first byte is
+
+		Origin origin = Origin::filesystem;
+		std::string format;             // carved: what its content was checked as, "JPEG", "PNG", "DOCX"...
 	};
 }

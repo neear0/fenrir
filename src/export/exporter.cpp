@@ -102,7 +102,7 @@ namespace {
 			return fail(Errc::no_space, "exporting");
 
 		// a new file, never an existing one: noreplace fails if the name's taken, then the next name is tried
-		const bool partial = candidate.recoverable_bytes < candidate.size;
+		const bool partial = candidate.integrity == Integrity::partial || candidate.recoverable_bytes < candidate.size;
 		const std::string name = to_utf8(target.filename()) + (partial ? ".partial" : "");
 		const fs::path dot = from_utf8(name).extension();
 		const std::string stem = to_utf8(from_utf8(name).stem()), extension = to_utf8(dot);

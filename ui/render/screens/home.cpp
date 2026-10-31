@@ -6,9 +6,9 @@
 void fenrir::screens::home() {
     using namespace celosia;
     render::groupbox::begin("Fenrir", "Data recovery and erasure, without the overpromising");
-    widgets::text("This is the P0 build: the workspace, the read-only image reader and this shell.");
-    widgets::text("Recover shows mock results so the list can be tried. Nothing has been scanned.");
-    widgets::text("Disk images open read-only through fenrir-cli for now: fenrir-cli info <image>");
+    widgets::text("The engine reads disk images, partition tables and FAT32's deleted files, and carves files");
+    widgets::text("by their content. For now that's through fenrir-cli: fenrir-cli files / carve <image>");
+    widgets::text("Recover shows mock results so the list can be tried. Scanning from here comes in P4.");
     widgets::text("Erasure isn't in this build. No code in it can write to a drive.");
     widgets::text("Nothing leaves this computer: no telemetry, no uploads.");
     render::groupbox::end();

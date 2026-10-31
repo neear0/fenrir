@@ -20,6 +20,7 @@
 #include <string_view>
 #include <vector>
 
+#include "storage/carving.h"
 #include "storage/exporter.h"
 #include "storage/fat32.h"
 #include "storage/file_image_source.h"
@@ -42,8 +43,14 @@ namespace {
 			"  files <image> [--partition N] [--all] [--why]\n"
 			"                                       the deleted files on a FAT32 volume, how recoverable each one is\n"
 			"                                       and (--why) what that's based on. --all lists the live ones too\n"
-			"  recover <image> <dir> [--partition N] [--id N]...\n"
-			"                                       copy deleted files out to dir: all that can be, or the ids given.\n"
+			"  carve <image> [--partition N] [--every-byte] [--why]\n"
+			"                                       files found by their content alone (JPEG, PNG, PDF, ZIP and what\n"
+			"                                       a zip can be: DOCX, ODT, JAR...) on the whole image, or one\n"
+			"                                       partition. ones a FAT32 scan finds too are left out, `files` has\n"
+			"                                       them. --every-byte looks for them at every byte, not every 512th\n"
+			"  recover <image> <dir> [--carved] [--partition N] [--every-byte] [--id N]...\n"
+			"                                       copy deleted files (--carved: carved ones) out to dir: all that\n"
+			"                                       can be, or the ids given.\n"
 			"                                       nothing in dir is ever replaced. dir shouldn't be on the drive\n"
 			"                                       the image came from, if that drive is the one being recovered\n"
 			"  --version                            print the version\n");
@@ -208,22 +215,28 @@ namespace {
 #endif
 	}
 
-	// a percentage on stderr, only when it's a terminal, so a redirected run gets just the hash
+	// a percentage on stderr, so a redirected run gets just the results
 	class t_percent final : public storage::ProgressSink {
 	public:
+		explicit t_percent(std::string_view what) : what_(what) {}
+
 		void progress(std::uint64_t done, std::uint64_t total) noexcept override {
 			const int percent = total == 0 ? 100 : static_cast<int>(done * 100 / total);
 			if (percent != shown_) {
 				shown_ = percent;
-				std::print(stderr, "\rhashing: {:3}%", percent);
+				std::print(stderr, "\r{}: {:3}%", what_, percent);
 			}
 		}
 		~t_percent() override {
 			if (shown_ >= 0)
-				std::print(stderr, "\r              \r");
+				std::print(stderr, "\r{:{}}\r", "", what_.size() + 6);
 		}
 
+		// itself when stderr is a terminal, else nothing
+		storage::ProgressSink* sink() { return terminal(stderr) ? this : nullptr; }
+
 	private:
+		std::string_view what_;
 		int shown_ = -1;
 	};
 
@@ -233,8 +246,8 @@ namespace {
 			return 1;
 		storage::Result<storage::Sha256::Digest> digest;
 		{
-			t_percent percent;
-			digest = storage::sha256_source(*image, nullptr, terminal(stderr) ? &percent : nullptr);
+			t_percent percent("hashing");
+			digest = storage::sha256_source(*image, nullptr, percent.sink());
 		}
 		if (!digest) {
 			print_error(digest.error());
@@ -342,6 +355,26 @@ namespace {
 		return 0;
 	}
 
+	int export_all(storage::IBlockSource& source, const std::vector<const storage::RecoveryCandidate*>& chosen, const std::filesystem::path& destination) {
+		std::println("to:      {}", utf8(destination.u8string()));
+		std::println("");
+		std::uint64_t written = 0, bytes = 0, failed = 0;
+		for (const storage::RecoveryCandidate* c : chosen) {
+			auto exported = storage::export_candidate(source, *c, destination);
+			if (!exported) {
+				failed++;
+				std::println("  {:>4}  not written ({}: {})  {}", c->id, exported.error().context, storage::to_string(exported.error().code), c->path);
+				continue;
+			}
+			written++;
+			bytes += exported->bytes;
+			std::println("  {:>4}  {:<13} {}  {}", c->id, storage::to_string(c->integrity), storage::to_hex(exported->sha256), utf8(exported->path.make_preferred().u8string()));
+		}
+		std::println("");
+		std::println("{} written ({} bytes), {} not. the SHA-256 is of what was written: check anything that isn't intact before trusting it", written, bytes, failed);
+		return failed == 0 ? 0 : 1;
+	}
+
 	int recover(const std::filesystem::path& path, const std::filesystem::path& destination, std::optional<std::uint64_t> partition, const std::vector<std::uint64_t>& ids) {
 		auto image = open(path);
 		if (!image)
@@ -367,31 +400,142 @@ namespace {
 				chosen.push_back(&scan->candidates[static_cast<std::size_t>(id)]);
 			}
 		}
+		return export_all(*volume->source, chosen, destination);
+	}
 
-		std::println("to:      {}", utf8(destination.u8string()));
-		std::println("");
-		std::uint64_t written = 0, bytes = 0, failed = 0;
-		for (const storage::RecoveryCandidate* c : chosen) {
-			auto exported = storage::export_candidate(*volume->source, *c, destination);
-			if (!exported) {
-				failed++;
-				std::println("  {:>4}  not written ({}: {})  {}", c->id, exported.error().context, storage::to_string(exported.error().code), c->path);
-				continue;
+	// a carve of the whole image or one partition, without what a fat32 scan of the same area finds: those come back
+	// with their names from `files`
+	struct t_carving {
+		std::unique_ptr<storage::PartitionView> partition; // null: the whole image was carved
+		storage::IBlockSource* source = nullptr;
+		storage::CarveScan scan;
+		std::size_t dropped = 0;
+		std::vector<std::string> volumes; // the fat32 volumes whose files were left out
+	};
+
+	std::optional<t_carving> carve_image(storage::FileImageSource& image, std::optional<std::uint64_t> number, bool every_byte) {
+		auto map = storage::scan_partitions(image);
+		if (!map) {
+			print_error(map.error());
+			return std::nullopt;
+		}
+		struct t_fat32 { // a fat32 volume in the carved area, from base on
+			storage::IBlockSource* source;
+			std::unique_ptr<storage::PartitionView> view;
+			std::uint64_t base;
+			std::string where;
+		};
+		std::vector<t_fat32> volumes;
+		t_carving out;
+		std::string where;
+		if (number) {
+			const auto p = std::ranges::find(map->partitions, *number, &storage::Partition::number);
+			if (p == map->partitions.end()) {
+				std::println(stderr, "error: there's no partition {}, `fenrir-cli partitions` lists them", *number);
+				return std::nullopt;
 			}
-			written++;
-			bytes += exported->bytes;
-			std::println("  {:>4}  {:<13} {}  {}", c->id, storage::to_string(c->integrity), storage::to_hex(exported->sha256), utf8(exported->path.u8string()));
+			auto view = storage::open_partition(image, *p);
+			if (!view) {
+				print_error(view.error());
+				return std::nullopt;
+			}
+			out.partition = std::move(*view);
+			out.source = out.partition.get();
+			where = std::format("partition {}", *number);
+			if (p->filesystem == storage::FileSystem::fat32)
+				volumes.push_back({ out.source, nullptr, 0, where });
+		} else {
+			out.source = &image;
+			where = "the whole image";
+			for (const storage::Partition& p : map->partitions)
+				if (p.filesystem == storage::FileSystem::fat32 && p.inside_disk)
+					if (auto view = storage::open_partition(image, p))
+						volumes.push_back({ view->get(), std::move(*view), p.offset_bytes, std::format("partition {}", p.number) });
+			if (map->partitions.empty() && map->whole_disk == storage::FileSystem::fat32)
+				volumes.push_back({ &image, nullptr, 0, "the image's own" });
+		}
+
+		const std::uint64_t size = out.source->size_bytes();
+		std::println("carving: {}, {} bytes ({}), {}", where, size, human_size(size), every_byte ? "a file can start at any byte" : "files start at a sector (every 512th byte)");
+		{
+			t_percent percent("carving");
+			auto scan = storage::carve(*out.source, { .alignment = every_byte ? 1u : 512u }, nullptr, percent.sink());
+			if (!scan) {
+				print_error(scan.error());
+				return std::nullopt;
+			}
+			out.scan = std::move(*scan);
+		}
+		for (const t_fat32& v : volumes) {
+			auto fat = storage::scan_fat32(*v.source);
+			if (!fat)
+				continue; // it only looked like fat32, there's nothing to leave out
+			out.dropped += storage::drop_known(out.scan.candidates, fat->candidates, v.base);
+			out.volumes.push_back(v.where);
+		}
+		return out;
+	}
+
+	int carve(const std::filesystem::path& path, std::optional<std::uint64_t> partition, bool every_byte, bool why) {
+		auto image = open(path);
+		if (!image)
+			return 1;
+		const auto carving = carve_image(*image, partition, every_byte);
+		if (!carving)
+			return 1;
+		const storage::CarveScan& s = carving->scan;
+
+		std::println("");
+		std::println("    id  status                size  format        offset  name");
+		for (const storage::RecoveryCandidate& c : s.candidates) {
+			std::println("  {:>4}  {:<13} {:>12}  {:<6} {:>12}  {}", c.id, storage::to_string(c.integrity), c.size, c.format, c.entry_offset, c.name);
+			if (why)
+				for (const std::string& reason : c.reasons)
+					std::println("        - {}", reason);
 		}
 		std::println("");
-		std::println("{} written ({} bytes), {} not. the SHA-256 is of what was written: check anything that isn't intact before trusting it", written, bytes, failed);
-		return failed == 0 ? 0 : 1;
+		std::print("{} files", s.candidates.size());
+		if (carving->dropped != 0) {
+			std::string volumes;
+			for (const std::string& v : carving->volumes)
+				volumes += (volumes.empty() ? "" : ", ") + v;
+			std::print(", and {} more that the FAT32 scan of {} finds with their names (`files --all` lists them)", carving->dropped, volumes);
+		}
+		std::println("");
+		if (s.rejected != 0)
+			std::println("{} didn't hold up as files and {} left out", s.rejected == 1 ? "1 signature" : std::format("{} signatures", s.rejected), s.rejected == 1 ? "was" : "were");
+		print_diagnostics(s.diagnostics);
+		return 0;
+	}
+
+	int recover_carved(const std::filesystem::path& path, const std::filesystem::path& destination, std::optional<std::uint64_t> partition, bool every_byte,
+		const std::vector<std::uint64_t>& ids) {
+		auto image = open(path);
+		if (!image)
+			return 1;
+		const auto carving = carve_image(*image, partition, every_byte);
+		if (!carving)
+			return 1;
+		const std::vector<storage::RecoveryCandidate>& found = carving->scan.candidates;
+		std::vector<const storage::RecoveryCandidate*> chosen;
+		for (const storage::RecoveryCandidate& c : found)
+			if (ids.empty())
+				chosen.push_back(&c);
+		for (std::uint64_t id : ids) {
+			if (id >= found.size()) {
+				std::println(stderr, "error: there's no carved file {}, `fenrir-cli carve` lists them", id);
+				return 2;
+			}
+			chosen.push_back(&found[static_cast<std::size_t>(id)]);
+		}
+		return export_all(*carving->source, chosen, destination);
 	}
 
 	struct t_args {
 		std::vector<std::filesystem::path> positional;
 		std::optional<std::uint64_t> partition, sector_size;
 		std::vector<std::uint64_t> ids;
-		bool all = false, why = false, bad = false;
+		bool all = false, why = false, carved = false, every_byte = false, bad = false;
 	};
 
 	t_args parse(const std::vector<std::filesystem::path>& args) {
@@ -410,6 +554,10 @@ namespace {
 					out.ids.push_back(*v);
 			} else if (a == "--all") {
 				out.all = true;
+			} else if (a == "--carved") {
+				out.carved = true;
+			} else if (a == "--every-byte") {
+				out.every_byte = true;
 			} else if (a == "--why") {
 				out.why = true;
 			} else if (a.native().starts_with(std::filesystem::path("--").native())) {
@@ -455,6 +603,10 @@ namespace {
 		}
 		if (command == "files" && n == 1)
 			return files(a.positional[0], a.partition, a.all, a.why);
+		if (command == "carve" && n == 1)
+			return carve(a.positional[0], a.partition, a.every_byte, a.why);
+		if (command == "recover" && n == 2 && a.carved)
+			return recover_carved(a.positional[0], a.positional[1], a.partition, a.every_byte, a.ids);
 		if (command == "recover" && n == 2)
 			return recover(a.positional[0], a.positional[1], a.partition, a.ids);
 		usage();

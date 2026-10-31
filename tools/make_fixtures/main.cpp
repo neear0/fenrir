@@ -1,11 +1,13 @@
-// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h and fat32.h into dir, and into dir/fat32_originals
-// what each recoverable file in fat32.img has to come back as, at the path `fenrir-cli recover` gives it. run by ctest
-// before the cli tests, it only ever writes into the build directory it's given
+// fenrir-make-fixtures <dir>: writes the test disk images from fixtures.h, fat32.h and carving.h into dir, and into
+// dir/fat32_originals and dir/carve_originals what each recoverable file in fat32.img and carve.img has to come back as,
+// at the path `fenrir-cli recover` gives it. run by ctest before the cli tests, it only ever writes into the build
+// directory it's given
 
 #include <filesystem>
 #include <fstream>
 #include <print>
 
+#include "carving.h"
 #include "fat32.h"
 #include "fixtures.h"
 
@@ -59,6 +61,20 @@ int main(int argc, char** argv) {
 		const fixtures::t_image content(file.original.begin(), file.original.begin() + static_cast<std::ptrdiff_t>(file.recoverable));
 		ok &= write(dir / "fat32_originals" / utf8_path(file.path.substr(1) + (partial ? ".partial" : "")), content);
 	}
+
+	// the carved files `fenrir-cli recover --carved` must reproduce, under carved/ like it writes them. the ones the
+	// fat32 scan finds too are left out of a carve, and a fragmented jpeg's cut isn't known in advance
+	const fixtures::t_carve_disk carve = fixtures::carve_disk();
+	ok &= write(dir / "carve.img", carve.image);
+	std::filesystem::remove_all(dir / "carve_originals", error);
+	for (const fixtures::t_carve_expected& file : carve.expected) {
+		if (file.in_fat32 || !file.matches_original())
+			continue;
+		const bool partial = file.integrity == "partial";
+		const fixtures::t_image content(file.original.begin(), file.original.begin() + static_cast<std::ptrdiff_t>(file.recoverable));
+		ok &= write(dir / "carve_originals" / "carved" / (file.name() + (partial ? ".partial" : "")), content);
+	}
+
 	if (ok)
 		std::println("fixtures written to {}", dir.string());
 	return ok ? 0 : 1;

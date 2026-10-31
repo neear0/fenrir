@@ -26,6 +26,7 @@ add_library(storage_core STATIC
     include/storage/recovery_candidate.h
     include/storage/fat32.h
     include/storage/exporter.h
+    include/storage/carving.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -35,6 +36,12 @@ add_library(storage_core STATIC
     src/partition/scan.cpp
     src/fs/fat32/scan.cpp
     src/export/exporter.cpp
+    src/carving/formats.h
+    src/carving/carve.cpp
+    src/carving/jpeg.cpp
+    src/carving/png.cpp
+    src/carving/pdf.cpp
+    src/carving/zip.cpp
 )
 if(WIN32)
     target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp)

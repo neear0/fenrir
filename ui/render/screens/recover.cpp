@@ -33,7 +33,7 @@ namespace {
             std::uint32_t state = 0x9E3779B9u; // xorshift, the same list every run
             const auto next = [&state] { state ^= state << 13; state ^= state >> 17; state ^= state << 5; return state; };
             const char* named[] = { "IMG_%04u.JPG", "DSC%05u.JPG", "Screenshot_%u.png", "invoice_%u.pdf", "notes_%u.txt", "backup_%u.zip" };
-            const char* carved[] = { "carved_%06u.jpg", "carved_%06u.png", "carved_%06u.pdf", "carved_%06u.zip" };
+            const char* carved[] = { "%010llx.jpg", "%010llx.png", "%010llx.pdf", "%010llx.zip" }; // where it starts, like the carver names them
             const char* carvers[] = { "Carved: JPEG", "Carved: PNG", "Carved: PDF", "Carved: ZIP" };
             char name[64];
             for (std::uint32_t i = 0; i < (std::uint32_t)mock_count; i++) {
@@ -41,9 +41,9 @@ namespace {
                 c.carved = next() % 3 == 0;
                 if (c.carved) {
                     const std::uint32_t kind = next() % 4;
-                    snprintf(name, sizeof(name), carved[kind], i);
                     c.found_by = carvers[kind];
                     c.start = (std::uint64_t)(next() % 4000000u) * 512u;
+                    snprintf(name, sizeof(name), carved[kind], (unsigned long long)c.start);
                 }
                 else {
                     snprintf(name, sizeof(name), named[next() % 6], next() % 10000u);

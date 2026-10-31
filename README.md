@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P2
+## Status: P3
 
 | | |
 |---|---|
@@ -18,12 +18,13 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Filesystem signatures per partition (FAT, exFAT, NTFS, ext, BitLocker, LUKS, swap) | done, a hint only |
 | SHA-256 of a source, a hex inspector, a fault-injecting source for tests | done, tested |
 | FAT32: live and deleted files and directories, deleted long names, Intact / Partial / Uncertain / Unrecoverable with reasons | done, tested on a synthetic volume |
+| Carving: JPEG, PNG, PDF and ZIP (and DOCX, XLSX, PPTX, ODT, EPUB, JAR, APK by what's inside) found by their content, each followed through its own structure | done, tested on a synthetic disk |
 | Export of recovered files to a separate folder, with SHA-256 | done, tested |
-| `fenrir-cli info / partitions / hex / hash / files / recover` | done, tested |
+| `fenrir-cli info / partitions / hex / hash / files / carve / recover` | done, tested |
 | UI shell: Home / Recover / Images / Erase / Reports / Settings | done |
 | Recover page | **mock data**: a virtualized list of 100,000 made up candidates |
 | Opening images from the UI | not yet (P4) |
-| Carving, NTFS, exFAT | not yet (P3, P5) |
+| Previewing carved files, NTFS, exFAT | not yet (P4, P5) |
 | Erasure | not in this build, no code here can write to a drive |
 
 ### The command line
@@ -36,6 +37,9 @@ fenrir-cli hash disk.img                     sha-256, compare it before and afte
 fenrir-cli files disk.img --why              deleted files on the FAT32 partition, and why each is rated as it is
 fenrir-cli files disk.img --all --partition 2
 fenrir-cli recover disk.img D:\recovered     copy out every deleted file that can be, or --id N for some
+fenrir-cli carve disk.img --why              files found by their content alone, and what each rating is based on
+fenrir-cli carve disk.img --partition 2 --every-byte
+fenrir-cli recover disk.img D:\recovered --carved
 ```
 
 A damaged table doesn't stop `partitions`: it lists what it could still read and notes what's wrong, e.g. a primary GPT that fails its CRC (the backup is used), a truncated image (partitions past the end are marked) or an MBR whose extended partition chain loops.
@@ -50,6 +54,23 @@ Deleting a file on FAT32 frees its clusters and marks its directory entries, but
 - **unrecoverable**: its first cluster is in use, or it never had one.
 
 A deleted file without a long name loses the first letter of its 8.3 name (`notes.txt` comes back as `_otes.txt`). With a long name, the letter is recovered from the long name's checksum. `--why` lists what each rating is based on.
+
+### How a carved file is rated
+
+When nothing on the disk records a file any more (its directory entry is overwritten, the volume was formatted, the partition is gone), it can still be found by its content. `carve` looks for each format's signature where files start (every 512th byte, or every byte with `--every-byte`) and then follows the format's own structure from there, which decides whether it's a file at all, where it ends and whether it's in one piece:
+
+| | what's checked |
+|---|---|
+| JPEG | every marker, and for baseline JPEGs (what cameras write) every block of the image data decoded, which has to come out at exactly the number the image needs. Bytes from another file stop decoding within a few blocks |
+| PNG | every chunk's CRC, from the header to the end chunk |
+| ZIP | every entry has to start where the one before ends, stored entries have to match their CRC, and the central directory and end record have to agree with the entries. What's inside tells DOCX, XLSX, PPTX, ODT, ODS, ODP, EPUB, JAR and APK apart |
+| PDF | every object, cross-reference table and trailer, startxref has to point at a cross-reference section and every table entry at the object it names, through incremental updates too |
+
+- **intact**: the structure checks out from start to end.
+- **partial**: it stops checking out partway, because the file was fragmented or overwritten there (or can't be read, or the image ends). What comes before is exported as `name.partial`. For JPEG the cut is at the sector before decoding failed, so its last few hundred bytes may be someone else's.
+- **uncertain**: the parts that can be checked check out, but the parts that would show damage can't be: progressive JPEGs (only their markers are followed), PDFs whose cross-reference entries don't match their objects.
+
+A signature with no file behind it isn't listed, only counted. Once a file is found the search goes on after it, so a thumbnail inside a photo or a picture inside a DOCX isn't found again on its own. Files the FAT32 scan of the same area finds are left out, since `files` has them with their names. Carved files have no names: each is called by where it starts (`00003ff400.jpg` starts at byte 0x3ff400).
 
 Exports only ever create new files: a name that's taken gets ` (2)`, and names from the disk are made safe (no `..`, separators, `:` streams or device names like `CON`), so nothing read from an image can write outside the folder. When recovering from a real drive (later), the folder has to be on a different drive.
 
@@ -80,7 +101,7 @@ What it builds, in `build/vs2022/<Debug|Release>/`:
 | `storage_tests` | `tests/.../storage_tests.exe` | doctest unit tests |
 | `make_fixtures` | `tests/.../fenrir-make-fixtures.exe` | writes the test disk images, run by CTest |
 
-CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals` recovers the deleted files from the FAT32 test image and checks each against its original with CMake's own SHA-256.
+CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals` recovers the deleted files from the FAT32 test image and checks each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk.
 
 ## Layout
 
@@ -90,6 +111,7 @@ src/core/          errors, results, hashes, the hex dump
 src/io/            block sources: image files, fault injection; read-only devices later
 src/partition/     MBR and GPT
 src/fs/fat32/      the FAT32 scanner
+src/carving/       the signature scan and a validator per format
 src/export/        the exporter, the only code in the engine that writes
 src/cli/           fenrir-cli
 tests/             unit tests, cli tests and the write-API check
@@ -113,7 +135,8 @@ cmake/             fenrir's targets
 - The UI keeps the DPI scale of the monitor it opened on (a CelosUI limitation).
 - The results list places rows at float positions, so past roughly 600,000 rows they start to land between pixels.
 - Fenrir's own license hasn't been chosen yet. `LICENSE.txt` is the MIT text inherited from the CelosUI fork (Dear ImGui's). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- The test disk images are built by Fenrir's own generator (`tools/make_fixtures`) from the MBR convention and the UEFI spec, independently of the parser's code, but they haven't been cross-checked against images made by other tools (diskpart, sgdisk, fdisk) yet.
+- The test disk images are built by Fenrir's own generator (`tools/make_fixtures`) from the MBR convention and the UEFI spec, independently of the parser's code, but they haven't been cross-checked against images made by other tools (diskpart, sgdisk, fdisk) yet. The JPEGs, PNGs and ZIPs it writes for carving were checked once by hand with Windows' own decoders (GDI+ and .NET's ZipFile), the PDFs weren't.
 - Hostile tables are tested with random damage in the unit tests, not with a real fuzzer (libFuzzer needs clang-cl, not set up yet).
 - C++23 on Linux needs GCC 14 or Clang 18 with libc++ / libstdc++ 14 (`<print>`); that's untested.
 - FAT32 gaps: 8.3 names with characters past ASCII (an OEM code page the volume doesn't name) show U+FFFD; only the first cluster of a deleted directory is read; exported files don't get their original timestamps back; on volumes with more than 65,535 clusters a deleted file whose first cluster's high half is 0 is rated uncertain, since Windows clears it on delete. The test volume has fewer clusters than Microsoft's FAT32 minimum (65,525), which Fenrir notes and reads anyway.
+- Carving gaps: a fragmented file only comes back up to its first gap, the rest isn't searched for. Nothing is decompressed, so compressed ZIP entries, PDF cross-reference streams and progressive JPEGs' image data aren't checked inside. Files inside other files (a JPEG in a ZIP) aren't found on their own, and by default nor is anything that doesn't start at a sector. Only four formats so far; video, audio, RAW photos and Office's older formats aren't carved.
