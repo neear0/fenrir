@@ -10,6 +10,7 @@
 
 #include "diagnostic.h"
 #include "hash.h"
+#include "imaging.h"
 #include "partition.h"
 #include "recovery_candidate.h"
 #include "result.h"
@@ -59,6 +60,8 @@ namespace storage {
 		bool open = false;         // an image is open and its partition table read
 		std::filesystem::path image;
 		std::uint64_t image_size = 0;
+		std::filesystem::path mapfile;          // the map it was read with, when it's an image fenrir-cli image (or ddrescue) made
+		std::shared_ptr<const ImageMap> map;   // that map, null without one
 		PartitionMap partitions;
 		std::vector<SessionVolume> volumes;
 		std::shared_ptr<const std::vector<FoundFile>> files; // never null, the same pointer until something's added

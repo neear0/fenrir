@@ -15,7 +15,7 @@
 #include "storage/carving.h"
 #include "storage/exporter.h"
 #include "storage/filesystem.h"
-#include "storage/file_image_source.h"
+#include "storage/mapped_image.h"
 #include "storage/session.h"
 
 namespace {
@@ -29,7 +29,8 @@ namespace {
 
 	// what the jobs read: the image, a view of each partition, and which of those each volume is
 	struct t_sources {
-		std::unique_ptr<FileImageSource> image;
+		std::unique_ptr<IBlockSource> image;  // through its map when it has one
+		std::shared_ptr<const ImageMap> map; // null without one
 		std::vector<std::unique_ptr<PartitionView>> views;
 		std::vector<IBlockSource*> volumes;
 	};
@@ -168,10 +169,11 @@ struct storage::RecoverySession::t_impl {
 		}
 
 		auto sources_now = std::make_shared<t_sources>();
-		auto image = FileImageSource::open(path);
+		auto image = open_image(path);
 		if (!image)
 			return stopped(image.error(), "it couldn't be opened: " + error_text(image.error()));
-		sources_now->image = std::move(*image);
+		sources_now->image = std::move(image->source);
+		sources_now->map = image->map;
 		auto map = scan_partitions(*sources_now->image);
 		if (!map)
 			return stopped(map.error(), "its partition table couldn't be read: " + error_text(map.error()));
@@ -180,6 +182,10 @@ struct storage::RecoverySession::t_impl {
 		volumes.push_back({ "the whole image", 0, sources_now->image->size_bytes(), map->partitions.empty() ? map->whole_disk : FileSystem::unknown });
 		sources_now->volumes.push_back(sources_now->image.get());
 		std::vector<Diagnostic> notes;
+		if (!image->note.empty())
+			notes.push_back({ Diagnostic::Severity::warning, image->note });
+		if (const ImageMap* m = image->map.get(); m && m->bytes(BlockStatus::finished) < m->size())
+			notes.push_back({ Diagnostic::Severity::warning, std::format("its map says {} of its {} bytes weren't read when the disk was imaged: nothing in them is taken for data", m->size() - m->bytes(BlockStatus::finished), m->size()) });
 		for (const Diagnostic& d : map->diagnostics)
 			notes.push_back({ d.severity, "partition table: " + d.message });
 		for (const Partition& p : map->partitions) {
@@ -199,6 +205,8 @@ struct storage::RecoverySession::t_impl {
 			sources = sources_now;
 			state.open = true;
 			state.image_size = sources_now->image->size_bytes();
+			state.map = image->map;
+			state.mapfile = image->map ? image->mapfile : std::filesystem::path();
 			state.partitions = std::move(*map);
 			state.volumes = volumes;
 			state.diagnostics = std::move(notes);
@@ -233,6 +241,8 @@ struct storage::RecoverySession::t_impl {
 				const std::uint64_t base = files->size();
 				for (RecoveryCandidate& c : scanned->candidates) {
 					c.id += base;
+					if (sources_now->map)
+						mark_unread(c, *sources_now->map, volumes[v].offset);
 					if (c.parent != RecoveryCandidate::no_parent)
 						c.parent += base;
 					files->push_back({ std::move(c), v });
@@ -300,6 +310,8 @@ struct storage::RecoverySession::t_impl {
 						s.carve_dropped++;
 						continue;
 					}
+					if (src->map)
+						mark_unread(c, *src->map, 0);
 					c.id = files->size();
 					files->push_back({ std::move(c), 0 });
 					s.volumes[0].files++;
@@ -335,6 +347,7 @@ struct storage::RecoverySession::t_impl {
 			files = state.files;
 			about.image = state.image;
 			about.image_size = state.image_size;
+			about.mapfile = state.mapfile;
 			about.volumes = state.volumes;
 			state.phase = SessionPhase::exporting;
 			state.destination = destination;

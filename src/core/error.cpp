@@ -15,6 +15,7 @@ std::string_view storage::to_string(Errc code) noexcept {
 	case Errc::no_space: return "not enough free space";
 	case Errc::exists: return "already exists";
 	case Errc::mismatch: return "doesn't match";
+	case Errc::unreadable: return "not in the image, the disk wasn't read there";
 	}
 	return "unknown error";
 }

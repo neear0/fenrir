@@ -21,6 +21,7 @@ namespace storage {
 		no_space,     // the destination doesn't have room for it
 		exists,       // a file that would have been created is already there, and nothing here replaces files
 		mismatch,     // isn't what it was before: a resumed copy's source, image or map don't belong together
+		unreadable,   // not in a disk image: the disk couldn't be read there, or wasn't yet, when it was imaged
 	};
 
 	std::string_view to_string(Errc code) noexcept;

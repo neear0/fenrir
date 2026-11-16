@@ -32,6 +32,7 @@ add_library(storage_core STATIC
     include/storage/carving.h
     include/storage/session.h
     include/storage/imaging.h
+    include/storage/mapped_image.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -56,6 +57,7 @@ add_library(storage_core STATIC
     src/imaging/image_file.h
     src/imaging/map.cpp
     src/imaging/acquire.cpp
+    src/imaging/mapped_image.cpp
 )
 if(WIN32)
     target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp src/imaging/image_file_win32.cpp)

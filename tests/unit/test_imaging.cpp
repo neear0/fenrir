@@ -1,18 +1,27 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <random>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "make_fixtures/fat32.h"
+#include "storage/exporter.h"
 #include "storage/fault_injecting_source.h"
+#include "storage/filesystem.h"
+#include "storage/hash.h"
 #include "storage/imaging.h"
+#include "storage/mapped_image.h"
 #include "storage/memory_source.h"
+#include "storage/partition.h"
+#include "storage/session.h"
 
 namespace fs = std::filesystem;
 using storage::BlockStatus;
@@ -520,5 +529,149 @@ TEST_CASE("an image and a map that don't belong together are left alone") {
 		o.cluster_size = 1000;
 		CHECK(storage::acquire_image(source, image, mapfile, o).error().code == Errc::invalid_argument);
 		CHECK_FALSE(fs::exists(image));
+	}
+}
+
+TEST_CASE("an image read with its map fails where the map says nothing was copied") {
+	auto bytes = pattern(10000);
+	ImageMap map(bytes.size());
+	map.set(0, 4000, BlockStatus::finished);
+	map.set(4000, 1000, BlockStatus::bad);
+	map.set(5000, 5000, BlockStatus::finished);
+	std::fill_n(bytes.begin() + 4000, 1000, std::byte{ 0 }); // as the image has it
+	auto mapped = storage::MappedImageSource::wrap(std::make_unique<storage::MemorySource>(bytes), map);
+	REQUIRE(mapped.has_value());
+	storage::IBlockSource& source = **mapped;
+	CHECK(source.size_bytes() == 10000);
+
+	std::vector<std::byte> out(2000);
+	CHECK(source.read_at(1000, out) == 2000u);
+	CHECK(source.read_at(3000, out) == 1000u); // cut where the copied part ends
+	CHECK(source.read_at(4500, out).error().code == Errc::unreadable);
+	CHECK(source.read_at(5000, out) == 2000u);
+	CHECK(source.read_at(9500, out) == 500u);
+	CHECK(source.read_at(10000, out) == 0u);
+	CHECK(source.read_at(10001, out).error().code == Errc::out_of_range);
+	CHECK(storage::read_exact(source, 3000, out).error().code == Errc::unreadable);
+	CHECK(storage::read_exact(source, 0, std::span(out).first(1000)).has_value());
+
+	CHECK(storage::MappedImageSource::wrap(std::make_unique<storage::MemorySource>(pattern(10)), map).error().code == Errc::mismatch);
+}
+
+TEST_CASE("a found file that runs into what wasn't copied is cut short there") {
+	ImageMap map(100000);
+	map.set(0, 100000, BlockStatus::finished);
+	map.set(50000, 512, BlockStatus::bad);
+	map.set(80000, 20000, BlockStatus::non_tried);
+
+	storage::RecoveryCandidate c;
+	c.size = c.recoverable_bytes = 30000;
+	c.integrity = storage::Integrity::intact;
+	c.extents = { { 1000, 10000 }, { 0, 4096, true }, { 45000, 15904 } }; // with a sparse run in the middle
+	SUBCASE("on a volume at the start of the image") {
+		CHECK(storage::mark_unread(c, map, 0));
+		CHECK(c.integrity == storage::Integrity::partial);
+		CHECK(c.recoverable_bytes == 10000 + 4096 + 5000);
+		REQUIRE(c.extents.size() == 3);
+		CHECK(c.extents[2].length == 5000);
+		CHECK(c.reasons.back().find("the disk couldn't read it") != std::string::npos);
+	}
+	SUBCASE("on a volume further in: the same extents land elsewhere") {
+		CHECK(storage::mark_unread(c, map, 40000)); // 41000..51000 hits the bad sector at 50000
+		CHECK(c.recoverable_bytes == 9000);
+		REQUIRE(c.extents.size() == 1);
+		CHECK(c.extents[0].length == 9000);
+	}
+	SUBCASE("starting on what wasn't read: nothing of it") {
+		CHECK(storage::mark_unread(c, map, 79000));
+		CHECK(c.integrity == storage::Integrity::unrecoverable);
+		CHECK(c.recoverable_bytes == 0);
+		CHECK(c.extents.empty());
+		CHECK(c.reasons.back().find("the copy hadn't got to it yet") != std::string::npos);
+	}
+	SUBCASE("all of it copied: left alone") {
+		c.extents.pop_back();
+		c.size = c.recoverable_bytes = 14096;
+		CHECK_FALSE(storage::mark_unread(c, map, 0));
+		CHECK(c.integrity == storage::Integrity::intact);
+		CHECK(c.recoverable_bytes == 14096);
+		CHECK(c.extents.size() == 2);
+		CHECK(c.reasons.empty());
+	}
+}
+
+TEST_CASE("an imaged disk with a bad area: a scan of it cuts the file that was there short, and the export matches what was read") {
+	const fixtures::t_image disk = fixtures::fat32_disk();
+	const std::uint64_t partition = 2048 * 512;
+
+	// where the photo is, from a scan of the disk itself
+	storage::MemorySource whole(disk);
+	auto view = storage::PartitionView::open(whole, partition, 8 * fixtures::mib);
+	const auto first = storage::scan_volume(**view, storage::FileSystem::fat32);
+	REQUIRE(first.has_value());
+	const auto photo = std::ranges::find(first->candidates, std::string("/DCIM/Holiday photo 2026.jpg"), &storage::RecoveryCandidate::path);
+	REQUIRE(photo != first->candidates.end());
+	REQUIRE(photo->integrity == storage::Integrity::intact);
+	REQUIRE(photo->extents.size() == 1);
+	const std::uint64_t photo_at = partition + photo->extents[0].offset;
+
+	t_temp_dir dir;
+	storage::FaultInjectingSource failing(whole);
+	failing.add_bad_region(photo_at + 5000, 100);
+	REQUIRE(storage::acquire_image(failing, dir.path / "disk.img", dir.path / "disk.map", small()).has_value());
+
+	auto opened = storage::open_image(dir.path / "disk.img");
+	REQUIRE(opened.has_value());
+	REQUIRE(opened->map);
+	CHECK(opened->mapfile == dir.path / "disk.map");
+	CHECK(opened->note.empty());
+	CHECK(opened->map->bytes(BlockStatus::bad) == 512);
+
+	auto mapped_view = storage::PartitionView::open(*opened->source, partition, 8 * fixtures::mib);
+	auto scanned = storage::scan_volume(**mapped_view, storage::FileSystem::fat32);
+	REQUIRE(scanned.has_value());
+	REQUIRE(scanned->candidates.size() == first->candidates.size());
+	std::size_t cut = 0;
+	for (storage::RecoveryCandidate& c : scanned->candidates)
+		cut += storage::mark_unread(c, *opened->map, partition);
+	CHECK(cut == 1);
+	storage::RecoveryCandidate& now = scanned->candidates[static_cast<std::size_t>(photo - first->candidates.begin())];
+	CHECK(now.integrity == storage::Integrity::partial);
+	CHECK(now.recoverable_bytes == 4608); // to the bad sector
+	auto exported = storage::export_candidate(**mapped_view, now, dir.path / "out");
+	REQUIRE(exported.has_value());
+	CHECK(exported->path.filename() == "Holiday photo 2026.jpg.partial");
+	CHECK(exported->sha256 == storage::Sha256::of(std::span(disk).subspan(static_cast<std::size_t>(photo_at), 4608)));
+
+	// and exporting the uncut candidate fails on the bad sector instead of handing out the image's zeros
+	auto uncut = storage::export_candidate(**mapped_view, *photo, dir.path / "out2");
+	REQUIRE_FALSE(uncut.has_value());
+	CHECK(uncut.error().code == Errc::unreadable);
+
+	SUBCASE("a session finds the map and does the same") {
+		storage::RecoverySession session;
+		REQUIRE(session.scan(dir.path / "disk.img", { .carve = false }));
+		session.wait();
+		const auto s = session.snapshot();
+		CAPTURE(s->status);
+		CHECK_FALSE(s->error);
+		REQUIRE(s->map);
+		CHECK(s->mapfile == dir.path / "disk.map");
+		bool noted = false;
+		for (const storage::Diagnostic& d : s->diagnostics)
+			noted |= d.message.find("weren't read when the disk was imaged") != std::string::npos;
+		CHECK(noted);
+		const auto found = std::ranges::find_if(*s->files, [](const storage::FoundFile& f) { return f.file.path == "/DCIM/Holiday photo 2026.jpg"; });
+		REQUIRE(found != s->files->end());
+		CHECK(found->file.integrity == storage::Integrity::partial);
+		CHECK(found->file.recoverable_bytes == 4608);
+	}
+	SUBCASE("a map next to it that isn't one is left out, and said so") {
+		fs::remove(dir.path / "disk.map");
+		write_text(dir.path / "disk.map", "not a map");
+		auto plain = storage::open_image(dir.path / "disk.img");
+		REQUIRE(plain.has_value());
+		CHECK_FALSE(plain->map);
+		CHECK(plain->note.find("couldn't be read as its map") != std::string::npos);
 	}
 }

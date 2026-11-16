@@ -26,6 +26,7 @@
 #include "storage/file_image_source.h"
 #include "storage/hash.h"
 #include "storage/hex_dump.h"
+#include "storage/mapped_image.h"
 #include "storage/partition.h"
 
 namespace {
@@ -92,13 +93,28 @@ namespace {
 		return value;
 	}
 
-	std::unique_ptr<storage::FileImageSource> open(const std::filesystem::path& path) {
-		auto opened = storage::FileImageSource::open(path);
+	// an image, read through its map when there's one next to it (what `image` makes)
+	struct t_image {
+		std::unique_ptr<storage::IBlockSource> source;
+		std::shared_ptr<const storage::ImageMap> map;
+		std::filesystem::path mapfile;
+		explicit operator bool() const { return source != nullptr; }
+		storage::IBlockSource& operator*() const { return *source; }
+		storage::IBlockSource* operator->() const { return source.get(); }
+	};
+
+	t_image open(const std::filesystem::path& path) {
+		auto opened = storage::open_image(path);
 		if (!opened) {
 			print_error(opened.error());
-			return nullptr;
+			return {};
 		}
-		return std::move(*opened);
+		if (!opened->note.empty())
+			std::println(stderr, "note: {}", opened->note);
+		if (const storage::ImageMap* map = opened->map.get(); map && map->bytes(storage::BlockStatus::finished) < map->size())
+			std::println(stderr, "note: read with its map {}: {} of its bytes weren't read when the disk was imaged, and aren't taken for data",
+				utf8(opened->mapfile.filename().u8string()), map->size() - map->bytes(storage::BlockStatus::finished));
+		return { std::move(opened->source), std::move(opened->map), std::move(opened->mapfile) };
 	}
 
 	int info(const std::filesystem::path& path) {
@@ -118,6 +134,11 @@ namespace {
 #else
 		std::println("access:  read-only");
 #endif
+		if (const storage::ImageMap* map = image.map.get()) {
+			std::println("map:     {}, {} of it copied, {} bad, {} not read yet", utf8(image.mapfile.u8string()), human_size(map->bytes(storage::BlockStatus::finished)),
+				human_size(map->bytes(storage::BlockStatus::bad)), human_size(map->unknown_bytes()));
+			std::println("         only what the map counts as copied is read, the rest fails as unreadable");
+		}
 		return 0;
 	}
 
@@ -242,20 +263,22 @@ namespace {
 	};
 
 	int hash(const std::filesystem::path& path) {
-		auto image = open(path);
-		if (!image)
+		auto image = storage::FileImageSource::open(path); // the file as it is, map or not
+		if (!image) {
+			print_error(image.error());
 			return 1;
+		}
 		storage::Result<storage::Sha256::Digest> digest;
 		{
 			t_percent percent("hashing");
-			digest = storage::sha256_source(*image, nullptr, percent.sink());
+			digest = storage::sha256_source(**image, nullptr, percent.sink());
 		}
 		if (!digest) {
 			print_error(digest.error());
 			return 1;
 		}
 		std::println("image:   {}", utf8(path.u8string()));
-		std::println("size:    {} bytes", image->size_bytes());
+		std::println("size:    {} bytes", (*image)->size_bytes());
 		std::println("sha256:  {}", storage::to_hex(*digest));
 		return 0;
 	}
@@ -267,9 +290,12 @@ namespace {
 		storage::IBlockSource* source = nullptr;
 		std::string where;
 		storage::FileSystem filesystem = storage::FileSystem::unknown;
+		std::uint64_t offset = 0;                 // in the image
+		const storage::ImageMap* map = nullptr;   // the image's, when it has one
 	};
 
-	std::optional<t_volume> find_volume(storage::FileImageSource& image, std::optional<std::uint64_t> number) {
+	std::optional<t_volume> find_volume(const t_image& opened, std::optional<std::uint64_t> number) {
+		storage::IBlockSource& image = *opened;
 		auto map = storage::scan_partitions(image);
 		if (!map) {
 			print_error(map.error());
@@ -292,6 +318,7 @@ namespace {
 			volume.source = volume.partition.get();
 			volume.where = std::format("partition {}", chosen->number);
 			volume.filesystem = chosen->filesystem;
+			volume.offset = chosen->offset_bytes;
 		} else if (!number && map->partitions.empty()) {
 			volume.source = &image;
 			volume.where = "the whole image";
@@ -303,6 +330,7 @@ namespace {
 				std::println(stderr, "error: no partition looks like a FAT32, exFAT or NTFS one, pick one with --partition N");
 			return std::nullopt;
 		}
+		volume.map = opened.map.get();
 		return volume;
 	}
 
@@ -316,6 +344,9 @@ namespace {
 			print_error(scanned.error());
 			return std::nullopt;
 		}
+		if (volume.map)
+			for (storage::RecoveryCandidate& c : scanned->candidates)
+				storage::mark_unread(c, *volume.map, volume.offset);
 		std::println("volume:  {}, {}", volume.where, scanned->summary);
 		return std::move(*scanned);
 	}
@@ -333,7 +364,7 @@ namespace {
 		auto image = open(path);
 		if (!image)
 			return 1;
-		auto volume = find_volume(*image, partition);
+		auto volume = find_volume(image, partition);
 		if (!volume)
 			return 1;
 		auto scan = scan_volume(*volume);
@@ -383,7 +414,7 @@ namespace {
 		auto image = open(path);
 		if (!image)
 			return 1;
-		auto volume = find_volume(*image, partition);
+		auto volume = find_volume(image, partition);
 		if (!volume)
 			return 1;
 		auto scan = scan_volume(*volume);
@@ -417,7 +448,7 @@ namespace {
 		std::vector<std::string> volumes; // the volumes whose files were left out
 	};
 
-	std::optional<t_carving> carve_image(storage::FileImageSource& image, std::optional<std::uint64_t> number, bool every_byte) {
+	std::optional<t_carving> carve_image(storage::IBlockSource& image, std::optional<std::uint64_t> number, bool every_byte) {
 		auto map = storage::scan_partitions(image);
 		if (!map) {
 			print_error(map.error());
