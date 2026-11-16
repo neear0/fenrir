@@ -1,7 +1,8 @@
 // fenrir-cli: the debug and test interface to the storage engine. it opens disk images read-only and says what's in
 // them. the files it writes are new ones, recovered files (recover) and a copy of a disk with its map (image), and a
-// disposable test image it's told to erase (erase run, after a typed confirmation). nothing it does can change a source,
-// and nothing in it can write to a drive
+// disposable test image it's told to erase (erase run, after a typed confirmation). nothing it does can change a source.
+// the one way it can write to a drive is erase run on a USB drive, in a build configured with FENRIR_DRIVE_ERASE, as
+// administrator, after a typed confirmation: see src/platform/windows/drive_erase.cpp
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -26,6 +27,7 @@
 
 #include "storage/carving.h"
 #include "storage/disks.h"
+#include "storage/drive_erase.h"
 #include "storage/exporter.h"
 #include "storage/filesystem.h"
 #include "storage/file_image_source.h"
@@ -77,7 +79,9 @@ namespace {
 			"                                       what erasing would do, what it may be called at most, and what\n"
 			"                                       it can't promise. nothing is done. <target> is a simulated drive\n"
 			"                                       (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash) or a disposable\n"
-			"                                       test image file. real drives can't be erased in this build (P8)\n"
+			"                                       test image file, or a USB drive, \\\\.\\PhysicalDriveN: planning\n"
+			"                                       works in any build, running only in one built with\n"
+			"                                       FENRIR_DRIVE_ERASE, as administrator. other drives are refused\n"
 			"  erase run <target> --confirm \"ERASE ...\" [the same] [--report dir] [--fault F]...\n"
 			"                                       do it, after typing the confirmation the plan asks for. --report\n"
 			"                                       writes a JSON report. simulated faults: fail-at=0.5,\n"
@@ -898,16 +902,27 @@ namespace {
 	// file. a drive is refused: erasing real drives is milestone P8, and there's no code here that could
 	int erase(bool run, const std::filesystem::path& target_path, const t_args& a) {
 		const std::string target_text(utf8(target_path.u8string()));
-		if (storage::physical_drive_number(target_path) || storage::is_device_path(target_path)) {
-			std::println(stderr, "error: real drives can't be erased in this build. that's milestone P8, after an independent review;");
-			std::println(stderr, "       there's no code here that could. erase works on simulated drives (sim:hdd...) and test image files");
+		const std::optional<std::uint32_t> drive_number = storage::physical_drive_number(target_path);
+		if (!drive_number && storage::is_device_path(target_path)) {
+			std::println(stderr, "error: only a whole drive, \\\\.\\PhysicalDriveN, can be erased: not a volume or another device");
 			return 1;
 		}
 
 		std::optional<storage::SimulatedDrive> simulated;
 		std::optional<storage::TestImageBackend> image;
+		std::optional<storage::DriveOverwriteBackend> drive;
 		storage::ISanitizationBackend* backend = nullptr;
-		if (target_text.starts_with("sim:")) {
+		if (drive_number) {
+			if (!a.faults.empty()) {
+				std::println(stderr, "error: faults are only for simulated drives");
+				return 2;
+			}
+			std::vector<std::filesystem::path> keep;
+			if (a.report)
+				keep.push_back(*a.report); // the report has to land on a drive that survives
+			drive.emplace(*drive_number, std::move(keep));
+			backend = &*drive;
+		} else if (target_text.starts_with("sim:")) {
 			storage::SimulatedFaults faults;
 			for (const std::string& f : a.faults) {
 				const auto value = [&](std::string_view key) -> std::optional<double> {
@@ -965,7 +980,7 @@ namespace {
 		request.verify = !a.no_verify;
 
 		const storage::TargetIdentity& id = target->identity;
-		std::println("target:      {}{}", target_text, simulated ? "  (simulated, in memory: no hardware is touched)" : "  (a test image file)");
+		std::println("target:      {}{}", target_text, simulated ? "  (simulated, in memory: no hardware is touched)" : drive ? "  (a REAL DRIVE: everything on it goes)" : "  (a test image file)");
 		std::println("media:       {}, {} bytes ({})", storage::to_string(id.media), id.size, human_size(id.size));
 		if (!id.model.empty())
 			std::println("drive:       {}, serial {}", id.model, id.serial);

@@ -38,6 +38,7 @@ add_library(storage_core STATIC
     include/storage/sanitize.h
     include/storage/simulated_drive.h
     include/storage/image_erase.h
+    include/storage/drive_erase.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -64,6 +65,7 @@ add_library(storage_core STATIC
     src/sanitation/report.cpp
     src/sanitation/simulated.cpp
     src/sanitation/image_erase.cpp
+    src/sanitation/drive_policy.cpp
     src/imaging/image_file.h
     src/imaging/map.cpp
     src/imaging/acquire.cpp
@@ -87,4 +89,14 @@ fenrir_warnings(storage_cli)
 if(MSVC)
     # the same dll loading rule as the ui, imported dlls only come from system32
     target_link_options(storage_cli PRIVATE $<$<NOT:$<CONFIG:Debug>>:/DEPENDENTLOADFLAG:0x800>)
+endif()
+
+# the drive writer (P8): the only code that can write to a drive, an overwrite of a USB drive, used by fenrir-cli as
+# administrator. off by default, so a build has no code that could write to a drive unless it's asked for by name
+option(FENRIR_DRIVE_ERASE "build the code that can overwrite a USB drive (P8, fenrir-cli only)" OFF)
+if(WIN32 AND FENRIR_DRIVE_ERASE)
+    target_sources(storage_core PRIVATE src/platform/windows/drive_erase.cpp src/platform/windows/win_disks.h)
+    message(STATUS "fenrir: the drive writer is in this build (FENRIR_DRIVE_ERASE)")
+else()
+    target_sources(storage_core PRIVATE src/sanitation/drive_erase_off.cpp)
 endif()

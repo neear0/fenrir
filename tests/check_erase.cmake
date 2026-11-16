@@ -62,6 +62,8 @@ if(NOT erased MATCHES "^(00)+$")
     message(FATAL_ERROR "the test image isn't all zeros: ${erased}")
 endif()
 
-# real drives, never
+# a drive that isn't USB (or holds windows or fenrir) is refused at the plan, every reason given, nothing done
 cli(FALSE erase plan "\\\\.\\PhysicalDrive0")
-expect("${out}" "real drives can't be erased in this build")
+expect("${out}" "refused, nothing was done")
+cli(FALSE erase run "\\\\.\\PhysicalDrive0" --confirm "ERASE 000000")
+expect("${out}" "refused, nothing was done")

@@ -142,6 +142,8 @@ std::variant<storage::SanitizePlan, storage::PlanRefusal> storage::plan_sanitize
 		refusal.reasons.push_back(std::format("{} isn't a sanitization method for a {}", to_string(m), to_string(id.media)));
 	if (id.media == Media::image_file && m != Method::overwrite)
 		refusal.reasons.push_back("a test image file can only be overwritten");
+	for (const std::string& blocker : caps.blockers)
+		refusal.reasons.push_back(blocker);
 	if (caps.system)
 		refusal.reasons.push_back("windows, its boot files or a page file are on it: that needs a separate offline workflow, which fenrir doesn't have");
 	if (caps.mounted)
@@ -165,6 +167,12 @@ std::variant<storage::SanitizePlan, storage::PlanRefusal> storage::plan_sanitize
 		: std::format("all of {}, {} ({} sectors of {} bytes)", name, human(id.size), id.size / caps.sector_size, caps.sector_size);
 
 	plan.steps.push_back("check again that the target is the one this plan was made for, and stop if it isn't");
+	if (!caps.volumes.empty()) {
+		std::string names;
+		for (const std::string& v : caps.volumes)
+			names += (names.empty() ? "" : ", ") + v;
+		plan.steps.push_back(std::format("take its volumes offline ({}): lock and dismount each one, and stop with nothing written if one is in use", names));
+	}
 	if (m == Method::overwrite) {
 		plan.steps.push_back(std::format("write {} over every sector, from the first to the last", request.zeros ? "zeros" : std::format("a pseudorandom pattern (seed {})", request.seed)));
 		plan.steps.push_back("flush, so the writes have reached it");

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "storage/disks.h"
+#include "win_disks.h"
 
 namespace {
 	using namespace storage;
@@ -119,6 +120,14 @@ namespace {
 			info.bus = bus_name(d->BusType);
 		} else
 			info.error = std::format("its description couldn't be read (os error {})", GetLastError());
+
+		// spinning or not: the same query, another property. a drive that doesn't say stays unknown
+		STORAGE_PROPERTY_QUERY seek{};
+		seek.PropertyId = StorageDeviceSeekPenaltyProperty;
+		seek.QueryType = PropertyStandardQuery;
+		DEVICE_SEEK_PENALTY_DESCRIPTOR penalty{};
+		if (DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &seek, sizeof seek, &penalty, sizeof penalty, &got, nullptr) && got >= sizeof penalty)
+			info.rotational = penalty.IncursSeekPenalty != FALSE;
 
 		alignas(DISK_GEOMETRY_EX) BYTE geometry_buffer[512]{};
 		if (!DeviceIoControl(handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, nullptr, 0, geometry_buffer, sizeof geometry_buffer, &got, nullptr)
@@ -355,4 +364,22 @@ storage::Result<void> storage::check_destination(const std::filesystem::path& de
 	if (std::ranges::find(*disks, source_disk) != disks->end())
 		return fail(Errc::invalid_argument, "checking the destination: it's on the drive being read, where writing could overwrite what's being recovered");
 	return {};
+}
+
+bool storage::win::describe_disk(void* handle, DiskInfo& info) { return describe(static_cast<HANDLE>(handle), info); }
+
+std::vector<std::wstring> storage::win::volumes_on(std::uint32_t disk) {
+	std::vector<std::wstring> out;
+	wchar_t name[MAX_PATH + 1]{};
+	const HANDLE find = FindFirstVolumeW(name, MAX_PATH);
+	if (find == INVALID_HANDLE_VALUE)
+		return out;
+	do {
+		const std::wstring volume = without_trailing_slash(name);
+		const std::vector<std::uint32_t> disks = volume_disks(volume);
+		if (std::ranges::find(disks, disk) != disks.end())
+			out.push_back(volume);
+	} while (FindNextVolumeW(find, name, MAX_PATH));
+	FindVolumeClose(find);
+	return out;
 }

@@ -82,6 +82,8 @@ namespace storage {
 		bool system = false;             // windows, its boot files or a page file are on it
 		bool mounted = false;            // a volume on it is mounted
 		bool encrypted_from_start = false; // all data was ever only written encrypted (crypto erase's precondition)
+		std::vector<std::string> blockers;  // why it mustn't be erased at all, as the backend found it: each one refuses every plan
+		std::vector<std::string> volumes;   // volumes on it that the run takes offline (locked and dismounted) before writing
 	};
 
 	struct Target {

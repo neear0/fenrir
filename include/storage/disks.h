@@ -19,6 +19,7 @@ namespace storage {
 		std::string vendor, model, serial; // utf-8, as the drive reports them (any of them can be empty)
 		std::string bus;                   // "USB", "SATA", "NVMe"...
 		bool removable = false;            // what the drive says, a usb hard disk often says it isn't
+		std::optional<bool> rotational;    // it spins (seeks cost time): a hard disk. nothing when it doesn't say
 		std::uint64_t size = 0;            // bytes
 		std::uint32_t sector_size = 0;     // logical, what reads have to be aligned to
 		std::vector<std::string> volumes;  // its volumes' mount points ("C:\"), or their names when they have none
