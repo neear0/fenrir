@@ -156,6 +156,18 @@ namespace storage {
 		std::string validation = "not assessed: whether this is adequate is a decision about the data's sensitivity, made by its owner";
 	};
 
+	// what carries a plan out on one kind of target. there are two: a simulated drive and a test image file. there is
+	// no backend for a real drive, and none can be made from an Authorization alone
+	class ISanitizationBackend {
+	public:
+		virtual ~ISanitizationBackend() = default;
+		// who the target is now and what it can do, asked again before planning, approving and running
+		virtual Result<Target> inspect() = 0;
+		// carries out an approved plan. the target is inspected again first: another target (mismatch) or one that can't
+		// be asked (that error) means nothing is done. anything that started ends in a report, however it went
+		virtual Result<SanitizeReport> execute(const Authorization& approved, const CancellationToken* cancel = nullptr, ProgressSink* progress = nullptr) = 0;
+	};
+
 	// the report as JSON: the plan, every step and error, verification and validation apart, and the caveats
 	std::string to_json(const SanitizeReport& report);
 	std::string iso_now(); // utc
