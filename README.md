@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P8 in progress, erasing a USB drive
+## Status: P8, erasing a USB drive (overwrite only)
 
 | | |
 |---|---|
@@ -32,12 +32,12 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Images with a map next to them are read through it: what wasn't copied fails as unreadable instead of reading as the zeros the image has there, and found files that run into it are cut short | done, tested |
 | Imaging in the window: **Images → Make an image** copies a disk image on a worker thread, with its map drawn as a bar, **Stop** and **Go on** | done, the session unit tested, the page looked at by hand |
 | Drives: `fenrir-cli drives` lists them without administrator rights (model, serial, bus, volumes, which one Windows is on); any command reads `\\.\PhysicalDriveN` read-only as administrator, the window lists them on **Images** to copy one, and offers to restart as administrator | done; reading tested on a 29 GiB USB stick (an image of its first 256 MiB hashes the same as the drive, imaging onto the stick itself is refused) |
-| Real-hardware failures (a drive with bad sectors, unplugged mid-copy) | only simulated so far, with the fault-injecting source |
+| Real-hardware failures (a drive with bad sectors, unplugged mid-copy or mid-erase) | only simulated so far, with the fault-injecting source and the simulated drive |
 | Erasure policy: what a method may be called on a medium (clear, purge, limited clear, none), a dry-run plan with what it can't promise, refusals with every reason (unsupported method with nothing else tried, system or mounted drive, ATA frozen or locked), approval by typed confirmation with the target checked again before anything runs | done, tested |
 | Erasure on a simulated drive (HDD, SATA SSD, NVMe SSD, USB stick) with faults to order: failing partway, power loss (a firmware sanitize finishes at the next power on), firmware that lies, unreadable afterwards, swapped between approval and running | done, tested: every fault ends in the status it is, never in success |
 | Erasure of disposable test image files: overwritten, flushed, read back, with a JSON report | done, tested (changed since approval, open in another program, stopped partway) |
 | Erase in the window and `fenrir-cli erase plan / run` | done, the window tried by hand on a simulated drive |
-| Erasing a USB drive (P8): an overwrite of every sector, flushed, read back. USB drives only; never the drive Windows is on, nor one holding fenrir, its temp folder, the current folder or the report's folder; its volumes taken offline first; checked again right before writing and once more on the open handle | written and reviewed (an independent review by another model, Fable: no blockers; its seven should-fix findings, fail-open spots among them, are fixed and re-reviewed). Compiled in only with `-DFENRIR_DRIVE_ERASE=ON` (off by default, and in CI): without it no code in the build can write to a drive. Not yet run on a real drive |
+| Erasing a USB drive (P8): an overwrite of every sector, flushed, read back. USB drives only; never the drive Windows is on, nor one holding fenrir, its temp folder, the current folder or the report's folder; its volumes taken offline first; checked again right before writing and once more on the open handle | written and reviewed (an independent review by another model, Fable: no blockers; its seven should-fix findings, fail-open spots among them, are fixed and re-reviewed). Compiled in only with `-DFENRIR_DRIVE_ERASE=ON` (off by default, and in CI): without it no code in the build can write to a drive. Run once on a disposable 29.30 GiB USB stick (USB 2.0): its volume taken offline, all 31,457,280,000 bytes written with zeros and flushed in 46 minutes, every sector read back, 0 wrong: verified, at most a limited clear. Read again afterwards: zeros at its start, at 1 MiB and at its end, no partition table, the other drives untouched |
 | ATA secure erase / sanitize, NVMe sanitize on real drives | not planned for now: there's no spare SATA or NVMe drive to test on, so these stay on the simulated drive |
 
 ### The window
