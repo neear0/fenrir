@@ -24,6 +24,7 @@ namespace storage {
 		std::uint32_t sector_size = 0;     // logical, what reads have to be aligned to
 		std::vector<std::string> volumes;  // its volumes' mount points ("C:\"), or their names when they have none
 		bool system = false;               // windows, or the volume it boots from, is on it
+		bool spanned_volume = false;       // a volume on it is on another drive too: erasing it would wreck that one
 		std::string error;                 // when something about it couldn't be read, what
 	};
 

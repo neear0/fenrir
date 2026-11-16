@@ -8,7 +8,8 @@
 #include "storage/sanitize.h"
 
 // the drive eraser's rules, on drives described in code. nothing here ever hands a real drive to the writer: the only
-// drive number execute() sees is one that doesn't exist (63 is past the 64 fenrir lists, counted from 0... and unused)
+// drive numbers execute() sees are 62 and 63, with a model and serial no real drive has, so even a machine with that
+// many drives would fail the identity check before anything is opened for writing
 using storage::DiskInfo;
 using storage::Errc;
 using storage::Media;
@@ -56,6 +57,7 @@ TEST_CASE("everything that makes a drive unsafe to erase is a blocker, each with
 	d.serial.clear();
 	d.size = 0;
 	d.sector_size = 520;
+	d.spanned_volume = true;
 	const std::string why = joined(storage::drive_blockers(d, { 7 }));
 	CHECK(why.find("attached over SATA, not USB") != std::string::npos);
 	CHECK(why.find("Windows is on it") != std::string::npos);
@@ -64,6 +66,7 @@ TEST_CASE("everything that makes a drive unsafe to erase is a blocker, each with
 	CHECK(why.find("no serial number") != std::string::npos);
 	CHECK(why.find("no size") != std::string::npos);
 	CHECK(why.find("sector size isn't usable") != std::string::npos);
+	CHECK(why.find("on another drive too") != std::string::npos);
 
 	DiskInfo nvme = stick();
 	nvme.bus = "NVMe";
@@ -82,7 +85,7 @@ TEST_CASE("a drive's plan: limited clear at most, its volumes offline first, the
 	REQUIRE(std::holds_alternative<storage::SanitizePlan>(result));
 	const auto& plan = std::get<storage::SanitizePlan>(result);
 	CHECK(plan.category == storage::Category::limited_clear);
-	CHECK(plan.confirmation == "ERASE 055030");
+	CHECK(plan.confirmation == "ERASE 7 055030"); // the drive number and the serial's end
 	CHECK(joined(plan.steps).find("take its volumes offline (E:\\)") != std::string::npos);
 	CHECK(joined(plan.caveats).find("flash controller") != std::string::npos);
 
@@ -99,6 +102,8 @@ TEST_CASE("the drive eraser does nothing to a drive that isn't there, or isn't t
 	// an approved plan for drive 63, handed to the backend for 63 (it isn't there) and for 62 (another number)
 	DiskInfo ghost = stick();
 	ghost.number = 63;
+	ghost.model = "NOT A REAL DRIVE"; // nothing a real drive could be
+	ghost.serial = "NOT-A-REAL-SERIAL";
 	ghost.path = "\\\\.\\PhysicalDrive63";
 	storage::Target t;
 	t.identity = storage::drive_identity(ghost);

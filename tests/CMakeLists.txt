@@ -29,7 +29,7 @@ add_executable(storage_tests
 target_include_directories(storage_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_include_directories(storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools) # make_fixtures/fixtures.h
 target_compile_definitions(storage_tests PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS) # its own std forward declarations break on newer msvc
-target_link_libraries(storage_tests PRIVATE storage_core)
+target_link_libraries(storage_tests PRIVATE storage_core storage_drive_erase)
 fenrir_warnings(storage_tests)
 add_test(NAME storage_tests COMMAND storage_tests)
 

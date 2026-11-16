@@ -34,6 +34,8 @@ std::vector<std::string> storage::drive_blockers(const DiskInfo& disk, const std
 		out.push_back(std::format("it's attached over {}, not USB: this build only erases USB drives", disk.bus.empty() ? "an unknown bus" : disk.bus));
 	if (disk.system)
 		out.push_back("Windows is on it");
+	if (disk.spanned_volume)
+		out.push_back("a volume on it is on another drive too: erasing this one would wreck that volume");
 	if (std::ranges::find(protected_disks, disk.number) != protected_disks.end())
 		out.push_back("fenrir itself, its temp folder or a folder it was told to keep (a report's) is on it");
 	if (disk.size == 0)

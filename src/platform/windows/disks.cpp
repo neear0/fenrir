@@ -141,25 +141,32 @@ namespace {
 		return true;
 	}
 
-	// the drives a volume is on, from its \\?\Volume{...} name without the trailing backslash
-	std::vector<std::uint32_t> volume_disks(const std::wstring& volume) {
+	// the drives a volume is on, from its \\?\Volume{...} name without the trailing backslash. nothing when that can't
+	// be found out: callers fail closed on it
+	std::optional<std::vector<std::uint32_t>> volume_disks(const std::wstring& volume, DWORD* why = nullptr) {
 		std::vector<std::uint32_t> out;
 		const t_handle handle = open_for_queries(volume);
-		if (!handle.ok())
-			return out;
+		if (!handle.ok()) {
+			if (why)
+				*why = GetLastError();
+			return std::nullopt;
+		}
 		std::vector<BYTE> buffer(sizeof(VOLUME_DISK_EXTENTS) + 15 * sizeof(DISK_EXTENT));
 		DWORD got = 0;
 		for (int tries = 0; tries < 2; tries++) {
 			if (DeviceIoControl(handle.value, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, nullptr, 0, buffer.data(), static_cast<DWORD>(buffer.size()), &got, nullptr))
 				break;
-			if (GetLastError() != ERROR_MORE_DATA || got < sizeof(VOLUME_DISK_EXTENTS))
-				return out;
+			const DWORD error = GetLastError();
+			if (why)
+				*why = error;
+			if (error != ERROR_MORE_DATA || got < sizeof(VOLUME_DISK_EXTENTS))
+				return std::nullopt;
 			const auto* partial = reinterpret_cast<const VOLUME_DISK_EXTENTS*>(buffer.data());
 			buffer.resize(sizeof(VOLUME_DISK_EXTENTS) + std::min<DWORD>(partial->NumberOfDiskExtents, 4096) * sizeof(DISK_EXTENT));
 			got = 0;
 		}
 		if (got < sizeof(VOLUME_DISK_EXTENTS))
-			return out;
+			return std::nullopt;
 		const auto* extents = reinterpret_cast<const VOLUME_DISK_EXTENTS*>(buffer.data());
 		const DWORD fits = static_cast<DWORD>((got - offsetof(VOLUME_DISK_EXTENTS, Extents)) / sizeof(DISK_EXTENT));
 		for (DWORD i = 0; i < std::min(extents->NumberOfDiskExtents, fits); i++)
@@ -184,36 +191,67 @@ namespace {
 		return std::wstring(volume);
 	}
 
-	// every volume, and the drives each is on
+	// where a volume (its \\?\Volume{...}\ name) is: the drives it's on, or none for an empty CD drive or card slot
+	// (nothing on any drive). unknown otherwise: callers fail closed
+	enum class e_place { placed, empty, unknown };
+	e_place place(const std::wstring& name, std::vector<std::uint32_t>& disks) {
+		if (GetDriveTypeW(name.c_str()) == DRIVE_CDROM)
+			return e_place::empty;
+		DWORD why = 0;
+		if (auto on = volume_disks(without_trailing_slash(name), &why)) {
+			disks = std::move(*on);
+			return e_place::placed;
+		}
+		return why == ERROR_NOT_READY || why == ERROR_NO_MEDIA_IN_DRIVE ? e_place::empty : e_place::unknown;
+	}
+
+	// says on every drive what couldn't be found out, which drive_blockers() refuses erasure on
+	void unsure(std::vector<DiskInfo>& disks, const std::string& what) {
+		for (DiskInfo& d : disks)
+			d.error += (d.error.empty() ? "" : "; ") + what;
+	}
+
+	// every volume, and the drives each is on. which drive windows is on, or where a volume is, that can't be told is
+	// written on every drive: an erase would have to guess, so it's refused
 	void add_volumes(std::vector<DiskInfo>& disks) {
-		std::vector<std::uint32_t> system;
+		std::optional<std::vector<std::uint32_t>> system;
 		wchar_t windows[MAX_PATH + 1]{};
 		if (GetSystemWindowsDirectoryW(windows, MAX_PATH))
 			if (const auto volume = volume_of(windows))
 				system = volume_disks(without_trailing_slash(*volume));
+		if (!system || system->empty())
+			unsure(disks, "which drive Windows is on couldn't be told");
 
 		wchar_t name[MAX_PATH + 1]{};
 		const HANDLE find = FindFirstVolumeW(name, MAX_PATH);
-		if (find == INVALID_HANDLE_VALUE)
-			return;
-		do {
-			std::wstring mounts(1024, L'\0');
-			DWORD length = 0;
-			std::string shown;
-			if (GetVolumePathNamesForVolumeNameW(name, mounts.data(), static_cast<DWORD>(mounts.size()), &length))
-				for (const wchar_t* m = mounts.c_str(); *m; m += wcslen(m) + 1)
-					shown += (shown.empty() ? "" : ", ") + to_utf8(m);
-			if (shown.empty())
-				shown = to_utf8(name);
-			for (std::uint32_t disk : volume_disks(without_trailing_slash(name)))
-				for (DiskInfo& d : disks)
-					if (d.number == disk)
-						d.volumes.push_back(shown);
-		} while (FindNextVolumeW(find, name, MAX_PATH));
-		FindVolumeClose(find);
+		if (find == INVALID_HANDLE_VALUE) {
+			unsure(disks, "the volumes couldn't be listed");
+		} else {
+			do {
+				std::wstring mounts(1024, L'\0');
+				DWORD length = 0;
+				std::string shown;
+				if (GetVolumePathNamesForVolumeNameW(name, mounts.data(), static_cast<DWORD>(mounts.size()), &length))
+					for (const wchar_t* m = mounts.c_str(); *m; m += wcslen(m) + 1)
+						shown += (shown.empty() ? "" : ", ") + to_utf8(m);
+				if (shown.empty())
+					shown = to_utf8(name);
+				std::vector<std::uint32_t> on;
+				const e_place where = place(name, on);
+				if (where == e_place::unknown)
+					unsure(disks, "which drive volume " + shown + " is on couldn't be told");
+				for (std::uint32_t disk : on)
+					for (DiskInfo& d : disks)
+						if (d.number == disk) {
+							d.volumes.push_back(shown);
+							d.spanned_volume |= on.size() > 1;
+						}
+			} while (FindNextVolumeW(find, name, MAX_PATH));
+			FindVolumeClose(find);
+		}
 
 		for (DiskInfo& d : disks)
-			d.system = std::ranges::find(system, d.number) != system.end();
+			d.system = system && std::ranges::find(*system, d.number) != system->end();
 	}
 }
 
@@ -339,6 +377,10 @@ storage::Result<std::vector<std::uint32_t>> storage::disks_of(const std::filesys
 			return fail(Errc::unsupported, "finding which drive a path is on");
 		while (!fs::exists(existing, error) && existing.has_relative_path())
 			existing = existing.parent_path();
+		// where it really is: a junction or link to another drive is followed (GetVolumePathNameW doesn't)
+		existing = fs::canonical(existing, error);
+		if (error)
+			return fail(Errc::unsupported, "finding which drive a path is on: where it leads couldn't be resolved", static_cast<std::uint32_t>(error.value()));
 
 		wchar_t mount[MAX_PATH + 1]{};
 		if (!GetVolumePathNameW(existing.c_str(), mount, MAX_PATH))
@@ -348,7 +390,7 @@ storage::Result<std::vector<std::uint32_t>> storage::disks_of(const std::filesys
 		const auto volume = volume_of(existing);
 		if (!volume)
 			return fail(Errc::unsupported, "finding which drive a path is on", GetLastError());
-		std::vector<std::uint32_t> disks = volume_disks(without_trailing_slash(*volume));
+		const std::vector<std::uint32_t> disks = volume_disks(without_trailing_slash(*volume)).value_or(std::vector<std::uint32_t>{});
 		if (disks.empty())
 			return fail(Errc::unsupported, "finding which drive a path is on: its volume didn't say");
 		return disks;
@@ -368,18 +410,28 @@ storage::Result<void> storage::check_destination(const std::filesystem::path& de
 
 bool storage::win::describe_disk(void* handle, DiskInfo& info) { return describe(static_cast<HANDLE>(handle), info); }
 
-std::vector<std::wstring> storage::win::volumes_on(std::uint32_t disk) {
+storage::Result<std::vector<std::wstring>> storage::win::volumes_on(std::uint32_t disk) {
 	std::vector<std::wstring> out;
 	wchar_t name[MAX_PATH + 1]{};
 	const HANDLE find = FindFirstVolumeW(name, MAX_PATH);
 	if (find == INVALID_HANDLE_VALUE)
-		return out;
+		return fail(Errc::io_error, "finding the volumes on the drive: they couldn't be listed", GetLastError());
+	Result<std::vector<std::wstring>> result = out;
 	do {
-		const std::wstring volume = without_trailing_slash(name);
-		const std::vector<std::uint32_t> disks = volume_disks(volume);
-		if (std::ranges::find(disks, disk) != disks.end())
-			out.push_back(volume);
+		std::vector<std::uint32_t> disks;
+		const e_place where = place(name, disks);
+		if (where == e_place::unknown) {
+			result = fail(Errc::io_error, "finding the volumes on the drive: which drive one of them is on couldn't be told");
+			break;
+		}
+		if (std::ranges::find(disks, disk) == disks.end())
+			continue;
+		if (disks.size() > 1) {
+			result = fail(Errc::unsupported, "finding the volumes on the drive: one of them is also on another drive");
+			break;
+		}
+		result->push_back(without_trailing_slash(name));
 	} while (FindNextVolumeW(find, name, MAX_PATH));
 	FindVolumeClose(find);
-	return out;
+	return result;
 }

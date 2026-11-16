@@ -3,7 +3,9 @@
 # imaging in src/imaging/, which may create a new image file, write into it (or into one its map was made with), and
 # replace its own map whole. nothing else, not even there. erasing a disposable test image (P7, src/sanitation/) goes
 # through imaging's ImageFile::open_existing, so it has no write api of its own: nothing here lets it have one.
-# the ui (ui/, ImGui) isn't scanned: it never touches storage, it only talks to storage_core.
+# the drive writer (P8) is the one file allowed to write to a drive: src/platform/windows/drive_erase.cpp, see below.
+# fenrir's own ui code (ui/render/screens/) and main.cpp are scanned too. CelosUI and ImGui (the rest of ui/) aren't:
+# they never touch storage, they only draw.
 # tools/ isn't either: the fixture generator writes test images, into the build directory ctest gives it.
 # a text search, so it also catches names in comments: say "writing" in prose, not the api.
 # usage: cmake -DROOT=<source dir> -P check_no_write_apis.cmake
@@ -12,7 +14,9 @@ if(NOT ROOT)
     message(FATAL_ERROR "pass -DROOT=<source dir>")
 endif()
 
-file(GLOB_RECURSE sources ${ROOT}/src/*.cpp ${ROOT}/src/*.h ${ROOT}/include/*.h)
+file(GLOB_RECURSE sources ${ROOT}/src/*.cpp ${ROOT}/src/*.h ${ROOT}/src/*.hpp ${ROOT}/src/*.inl ${ROOT}/src/*.ixx ${ROOT}/src/*.c
+    ${ROOT}/include/*.h ${ROOT}/include/*.hpp ${ROOT}/ui/render/screens/*.cpp ${ROOT}/ui/render/screens/*.h)
+list(APPEND sources ${ROOT}/main.cpp)
 # can write to a device, or to any file that's already there: nowhere in the engine
 set(forbidden
     WriteFile DeviceIoControl GENERIC_WRITE GENERIC_ALL FILE_WRITE_DATA FILE_APPEND_DATA CreateFileMapping MapViewOfFile
@@ -21,6 +25,8 @@ set(forbidden
     fopen "std::fstream" "::fstream" basic_fstream wfstream "ios::app" "ios::trunc" "ios::ate" "rename(" "fs::copy" "filesystem::copy" "resize_file"
     "permissions(" "last_write_time(" "create_symlink" "create_hard_link"
     CREATE_ALWAYS OPEN_ALWAYS TRUNCATE_EXISTING SetFileInformationByHandle "link("
+    freopen _wfsopen fwrite filebuf "remove_all(" CreateDirectory RemoveDirectory FILE_ALL_ACCESS MAXIMUM_ALLOWED FILE_FLAG_DELETE_ON_CLOSE
+    NtCreateFile ZwCreateFile NtWriteFile CTL_CODE "0x40000000" "0xC0000000" "0x10000000"
 )
 # creating new files and directories, and removing files: only the exporter
 set(export_only ofstream "<fstream>" "ios::out" noreplace "create_director" "remove(")
@@ -63,8 +69,10 @@ foreach(source ${sources})
         list(APPEND allowed ${drive_writer_controls})
         count_of("${text}" "WriteFile(" writes)
         count_of("${text}" "GENERIC_WRITE" opens)
-        if(NOT writes EQUAL 1 OR NOT opens EQUAL 2)
-            list(APPEND found "src/platform/windows/drive_erase.cpp: ${writes} WriteFile( and ${opens} GENERIC_WRITE, where 1 and 2 were reviewed")
+        count_of("${text}" "CreateFileW(" creates)
+        count_of("${text}" "DeviceIoControl(" controls)
+        if(NOT writes EQUAL 1 OR NOT opens EQUAL 2 OR NOT creates EQUAL 2 OR NOT controls EQUAL 2)
+            list(APPEND found "src/platform/windows/drive_erase.cpp: ${writes} WriteFile(, ${opens} GENERIC_WRITE, ${creates} CreateFileW( and ${controls} DeviceIoControl(, where 1, 2, 2 and 2 were reviewed")
         endif()
     endif()
     string(FIND "${source}" "${platform_dir}" in_platform)
@@ -75,6 +83,25 @@ foreach(source ${sources})
             if(NOT code IN_LIST allowed)
                 file(RELATIVE_PATH relative ${ROOT} ${source})
                 list(APPEND found "${relative}: ${code}, not one of the queries allowed")
+            endif()
+        endforeach()
+        # and every DeviceIoControl names one of them on its own line: a number or a renamed constant doesn't pass
+        string(REPLACE ";" "," flat "${text}")
+        string(REPLACE "
+" ";" lines "${flat}")
+        foreach(line IN LISTS lines)
+            if(line MATCHES "DeviceIoControl[(]")
+                set(named FALSE)
+                foreach(code ${allowed})
+                    string(FIND "${line}" "${code}" at)
+                    if(NOT at EQUAL -1)
+                        set(named TRUE)
+                    endif()
+                endforeach()
+                if(NOT named)
+                    file(RELATIVE_PATH relative ${ROOT} ${source})
+                    list(APPEND found "${relative}: a DeviceIoControl that doesn't name an allowed code: ${line}")
+                endif()
             endif()
         endforeach()
     endif()
@@ -126,9 +153,26 @@ foreach(source ${imaging_sources})
     endforeach()
 endforeach()
 
+# and only fenrir-cli reaches the drive writer: its class and header appear nowhere else (the window can't erase a drive)
+set(drive_writer_users include/storage/drive_erase.h src/sanitation/drive_policy.cpp src/sanitation/drive_erase_off.cpp
+    src/platform/windows/drive_erase.cpp src/cli/main.cpp)
+foreach(source ${sources})
+    file(RELATIVE_PATH relative ${ROOT} ${source})
+    if(relative IN_LIST drive_writer_users)
+        continue()
+    endif()
+    file(READ ${source} text)
+    foreach(word DriveOverwriteBackend "drive_erase.h")
+        string(FIND "${text}" "${word}" at)
+        if(NOT at EQUAL -1)
+            list(APPEND found "${relative}: ${word}, which only fenrir-cli may use")
+        endif()
+    endforeach()
+endforeach()
+
 list(LENGTH sources count)
 if(found)
     list(JOIN found "\n  " report)
     message(FATAL_ERROR "write capable apis outside the reviewed write paths:\n  ${report}")
 endif()
-message(STATUS "no write capable apis outside src/export/ and src/imaging/, and only the allowed drive queries, in ${count} files")
+message(STATUS "no write capable apis outside src/export/, src/imaging/ and the drive writer, only the allowed drive queries, in ${count} files")

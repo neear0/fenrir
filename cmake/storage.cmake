@@ -65,7 +65,6 @@ add_library(storage_core STATIC
     src/sanitation/report.cpp
     src/sanitation/simulated.cpp
     src/sanitation/image_erase.cpp
-    src/sanitation/drive_policy.cpp
     src/imaging/image_file.h
     src/imaging/map.cpp
     src/imaging/acquire.cpp
@@ -94,9 +93,14 @@ endif()
 # the drive writer (P8): the only code that can write to a drive, an overwrite of a USB drive, used by fenrir-cli as
 # administrator. off by default, so a build has no code that could write to a drive unless it's asked for by name
 option(FENRIR_DRIVE_ERASE "build the code that can overwrite a USB drive (P8, fenrir-cli only)" OFF)
+# its own library, linked only into fenrir-cli and the tests: the window never contains it
+add_library(storage_drive_erase STATIC include/storage/drive_erase.h src/sanitation/drive_policy.cpp)
+target_link_libraries(storage_drive_erase PUBLIC storage_core)
+fenrir_warnings(storage_drive_erase)
 if(WIN32 AND FENRIR_DRIVE_ERASE)
-    target_sources(storage_core PRIVATE src/platform/windows/drive_erase.cpp src/platform/windows/win_disks.h)
-    message(STATUS "fenrir: the drive writer is in this build (FENRIR_DRIVE_ERASE)")
+    target_sources(storage_drive_erase PRIVATE src/platform/windows/drive_erase.cpp src/platform/windows/win_disks.h)
+    message(STATUS "fenrir: the drive writer is in this build (FENRIR_DRIVE_ERASE), in fenrir-cli only")
 else()
-    target_sources(storage_core PRIVATE src/sanitation/drive_erase_off.cpp)
+    target_sources(storage_drive_erase PRIVATE src/sanitation/drive_erase_off.cpp)
 endif()
+target_link_libraries(storage_cli PRIVATE storage_drive_erase)

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <format>
 
+#include "storage/disks.h"
 #include "storage/sanitize.h"
 
 namespace {
@@ -38,7 +39,10 @@ namespace {
 		if (id.media == Media::image_file)
 			return "ERASE " + name_of(id);
 		const std::string& key = id.serial.empty() ? id.model : id.serial;
-		return "ERASE " + (key.size() > 6 ? key.substr(key.size() - 6) : key);
+		const std::string tail = key.size() > 6 ? key.substr(key.size() - 6) : key;
+		if (const std::optional<std::uint32_t> drive = physical_drive_number(id.path)) // a real drive: its number too
+			return std::format("ERASE {} {}", *drive, tail);
+		return "ERASE " + tail;
 	}
 }
 

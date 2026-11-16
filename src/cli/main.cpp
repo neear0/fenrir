@@ -898,8 +898,8 @@ namespace {
 		return out;
 	}
 
-	// erase plan|run: a simulated drive (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash) or a disposable test image
-	// file. a drive is refused: erasing real drives is milestone P8, and there's no code here that could
+	// erase plan|run: a simulated drive (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash), a disposable test image file, or
+	// a USB drive (\\.\PhysicalDriveN: planned in any build, run only in a FENRIR_DRIVE_ERASE build, as administrator)
 	int erase(bool run, const std::filesystem::path& target_path, const t_args& a) {
 		const std::string target_text(utf8(target_path.u8string()));
 		const std::optional<std::uint32_t> drive_number = storage::physical_drive_number(target_path);
@@ -1046,7 +1046,7 @@ namespace {
 		interrupt_target = nullptr;
 		if (!report) {
 			print_error(report.error());
-			std::println(stderr, "nothing was done");
+			std::println(stderr, "nothing was written to it");
 			return 1;
 		}
 

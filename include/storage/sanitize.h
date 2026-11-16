@@ -11,9 +11,10 @@
 #include "jobs.h"
 #include "result.h"
 
-// erasure, P7: deciding what a target can be sanitized with and what that can honestly be called, then doing it to a
-// simulated drive or a disposable test image file. nothing here can reach a real drive: there's no backend for one,
-// DiskSource has no way to write, and tests/check_no_write_apis.cmake fails on any api that could.
+// erasure: deciding what a target can be sanitized with and what that can honestly be called, then doing it to a
+// simulated drive, a disposable test image file (P7) or a USB drive (P8, the drive eraser: only in a build configured
+// with FENRIR_DRIVE_ERASE, only from fenrir-cli). nothing in this header writes; DiskSource has no way to write, and
+// tests/check_no_write_apis.cmake keeps every api that could to the reviewed files.
 // the words follow NIST SP 800-88 as the development plan summarizes it (clear, purge; verification is not
 // validation). the standard itself wasn't consulted for this build, and no conformance is claimed
 namespace storage {
@@ -158,8 +159,8 @@ namespace storage {
 		std::string validation = "not assessed: whether this is adequate is a decision about the data's sensitivity, made by its owner";
 	};
 
-	// what carries a plan out on one kind of target. there are two: a simulated drive and a test image file. there is
-	// no backend for a real drive, and none can be made from an Authorization alone
+	// what carries a plan out on one kind of target: a simulated drive, a test image file, or (the drive eraser) a USB
+	// drive. each one checks the target again itself: an Authorization alone can't make it do anything to another one
 	class ISanitizationBackend {
 	public:
 		virtual ~ISanitizationBackend() = default;
