@@ -18,6 +18,8 @@ namespace storage {
 		// a read that touches any byte of the region fails with io_error, like a bad sector does: the whole request fails,
 		// not just the part on it
 		void add_bad_region(std::uint64_t offset, std::uint64_t length);
+		// like a bad region for its first failures reads, then readable: a sector that comes back on a retry
+		void add_flaky_region(std::uint64_t offset, std::uint64_t length, std::uint64_t failures);
 		// the first reads reads work, every one after that fails with io_error: a device that's been unplugged
 		void fail_after(std::uint64_t reads) noexcept { fail_after_ = reads; }
 
@@ -29,6 +31,7 @@ namespace storage {
 	private:
 		struct t_region {
 			std::uint64_t first, end; // [first, end)
+			std::uint64_t failures = UINT64_MAX; // reads touching it that fail before it reads
 		};
 
 		IBlockSource& inner_;

@@ -19,6 +19,7 @@ add_executable(storage_tests
     unit/test_ntfs.cpp
     unit/test_carving.cpp
     unit/test_session.cpp
+    unit/test_imaging.cpp
 )
 target_include_directories(storage_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_include_directories(storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools) # make_fixtures/fixtures.h

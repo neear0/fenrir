@@ -19,6 +19,8 @@ namespace storage {
 		out_of_memory,
 		cancelled,    // the job's CancellationToken was set
 		no_space,     // the destination doesn't have room for it
+		exists,       // a file that would have been created is already there, and nothing here replaces files
+		mismatch,     // isn't what it was before: a resumed copy's source, image or map don't belong together
 	};
 
 	std::string_view to_string(Errc code) noexcept;

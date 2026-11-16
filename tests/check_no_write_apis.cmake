@@ -1,6 +1,8 @@
-# fails when the storage engine or the cli uses an api that can write to a file or a device. the one reviewed write path is
-# the exporter in src/export/: it may create new files and directories and remove the files it created, and nothing
-# else, not even there. erasure of disposable image files (P7) will get its own entry here when it exists.
+# fails when the storage engine or the cli uses an api that can write to a file or a device. there are two reviewed write
+# paths: the exporter in src/export/, which may create new files and directories and remove the files it created, and
+# imaging in src/imaging/, which may create a new image file, write into it (or into one its map was made with), and
+# replace its own map whole. nothing else, not even there. erasure of disposable image files (P7) will get its own
+# entry here when it exists.
 # the ui (ui/, ImGui) isn't scanned: it never touches storage, it only talks to storage_core.
 # tools/ isn't either: the fixture generator writes test images, into the build directory ctest gives it.
 # a text search, so it also catches names in comments: say "writing" in prose, not the api.
@@ -17,16 +19,24 @@ set(forbidden
     O_WRONLY O_RDWR O_CREAT O_TRUNC pwrite ioctl mmap ftruncate unlink
     fopen "std::fstream" "::fstream" basic_fstream wfstream "ios::app" "ios::trunc" "ios::ate" "rename(" "fs::copy" "filesystem::copy" "resize_file"
     "permissions(" "last_write_time(" "create_symlink" "create_hard_link"
+    CREATE_ALWAYS OPEN_ALWAYS TRUNCATE_EXISTING SetFileInformationByHandle "link("
 )
 # creating new files and directories, and removing files: only the exporter
 set(export_only ofstream "<fstream>" "ios::out" noreplace "create_director" "remove(")
 set(export_dir ${ROOT}/src/export/)
+# writing into the image it made, and replacing its map: only imaging. it can't truncate or replace anything else
+set(imaging_only WriteFile GENERIC_WRITE MoveFile DeleteFile SetFileInformationByHandle O_WRONLY O_RDWR O_CREAT pwrite ftruncate "rename(" unlink "link(")
+set(imaging_dir ${ROOT}/src/imaging/)
 
 set(found "")
 foreach(source ${sources})
     file(READ ${source} text)
     set(words ${forbidden})
     string(FIND "${source}" "${export_dir}" in_export)
+    string(FIND "${source}" "${imaging_dir}" in_imaging)
+    if(in_imaging EQUAL 0)
+        list(REMOVE_ITEM words ${imaging_only})
+    endif()
     if(NOT in_export EQUAL 0)
         list(APPEND words ${export_only})
     endif()
@@ -57,9 +67,27 @@ foreach(source ${export_sources})
     endforeach()
 endforeach()
 
+# and imaging only creates files that aren't there yet, or opens ones that are without cutting them short: every
+# CreateFileW says CREATE_NEW or OPEN_EXISTING, every O_CREAT comes with O_EXCL
+file(GLOB imaging_sources ${imaging_dir}*.cpp)
+foreach(source ${imaging_sources})
+    file(RELATIVE_PATH relative ${ROOT} ${source})
+    file(READ ${source} text)
+    string(REPLACE ";" "," text "${text}")
+    string(REPLACE "\n" ";" lines "${text}")
+    foreach(line IN LISTS lines)
+        if(line MATCHES "CreateFileW[(]" AND NOT line MATCHES "CREATE_NEW|OPEN_EXISTING")
+            list(APPEND found "${relative}: a CreateFileW without CREATE_NEW or OPEN_EXISTING: ${line}")
+        endif()
+        if(line MATCHES "O_CREAT" AND NOT line MATCHES "O_EXCL")
+            list(APPEND found "${relative}: an O_CREAT without O_EXCL: ${line}")
+        endif()
+    endforeach()
+endforeach()
+
 list(LENGTH sources count)
 if(found)
     list(JOIN found "\n  " report)
-    message(FATAL_ERROR "write capable apis outside the reviewed write path:\n  ${report}")
+    message(FATAL_ERROR "write capable apis outside the reviewed write paths:\n  ${report}")
 endif()
-message(STATUS "no write capable apis outside src/export/ in ${count} files")
+message(STATUS "no write capable apis outside src/export/ and src/imaging/ in ${count} files")

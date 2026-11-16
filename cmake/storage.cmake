@@ -31,6 +31,7 @@ add_library(storage_core STATIC
     include/storage/exporter.h
     include/storage/carving.h
     include/storage/session.h
+    include/storage/imaging.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -52,11 +53,14 @@ add_library(storage_core STATIC
     src/carving/pdf.cpp
     src/carving/zip.cpp
     src/session/session.cpp
+    src/imaging/image_file.h
+    src/imaging/map.cpp
+    src/imaging/acquire.cpp
 )
 if(WIN32)
-    target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp)
+    target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp src/imaging/image_file_win32.cpp)
 else()
-    target_sources(storage_core PRIVATE src/io/file_image_source_posix.cpp)
+    target_sources(storage_core PRIVATE src/io/file_image_source_posix.cpp src/imaging/image_file_posix.cpp)
     target_compile_definitions(storage_core PUBLIC _FILE_OFFSET_BITS=64)
 endif()
 target_include_directories(storage_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
