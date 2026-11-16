@@ -37,7 +37,7 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Erasure on a simulated drive (HDD, SATA SSD, NVMe SSD, USB stick) with faults to order: failing partway, power loss (a firmware sanitize finishes at the next power on), firmware that lies, unreadable afterwards, swapped between approval and running | done, tested: every fault ends in the status it is, never in success |
 | Erasure of disposable test image files: overwritten, flushed, read back, with a JSON report | done, tested (changed since approval, open in another program, stopped partway) |
 | Erase in the window and `fenrir-cli erase plan / run` | done, the window tried by hand on a simulated drive |
-| Erasing a USB drive (P8): an overwrite of every sector, flushed, read back. USB drives only; never the drive Windows is on, nor one holding fenrir, its temp folder, the current folder or the report's folder; its volumes taken offline first; checked again right before writing and once more on the open handle | written, in review. Compiled in only with `-DFENRIR_DRIVE_ERASE=ON` (off by default, and in CI): without it no code in the build can write to a drive. Not yet run on a real drive |
+| Erasing a USB drive (P8): an overwrite of every sector, flushed, read back. USB drives only; never the drive Windows is on, nor one holding fenrir, its temp folder, the current folder or the report's folder; its volumes taken offline first; checked again right before writing and once more on the open handle | written and reviewed (an independent review by another model, Fable: no blockers; its seven should-fix findings, fail-open spots among them, are fixed and re-reviewed). Compiled in only with `-DFENRIR_DRIVE_ERASE=ON` (off by default, and in CI): without it no code in the build can write to a drive. Not yet run on a real drive |
 | ATA secure erase / sanitize, NVMe sanitize on real drives | not planned for now: there's no spare SATA or NVMe drive to test on, so these stay on the simulated drive |
 
 ### The window
@@ -150,7 +150,7 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-**The drive eraser** (P8) is left out unless it's asked for by name: `cmake --preset vs2022 -DFENRIR_DRIVE_ERASE=ON`. A build without it can plan the erasure of a drive and show every reason one is refused, but has no code that could write to a drive. CI builds without it.
+**The drive eraser** (P8) is left out unless it's asked for by name: `cmake --preset vs2022 -DFENRIR_DRIVE_ERASE=ON`. A build without it can plan the erasure of a drive and show every reason one is refused, but has no code that could write to a drive. CI builds without it. The writer is in its own library that only `fenrir-cli` links, so the window never contains it. Switching the option off in an existing Debug build can leave the old code in `fenrir-cli.exe` through incremental linking: delete the exe (and its `.ilk`) to relink it clean.
 
 What it builds, in `build/vs2022/<Debug|Release>/`:
 

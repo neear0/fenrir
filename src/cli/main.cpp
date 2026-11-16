@@ -1057,7 +1057,7 @@ namespace {
 			std::println("  - {}", e);
 		for (const std::string& e : report->errors)
 			std::println("  ! {}", e);
-		std::println("checked:     {}", report->verification.done ? std::format("{} bytes, {} sectors wrong", report->verification.bytes_checked, report->verification.mismatches) : "not read back");
+		std::println("checked:     {}", report->verification.bytes_checked != 0 ? std::format("{} bytes{}, {} sectors wrong", report->verification.bytes_checked, report->verification.done ? "" : " (not all of it)", report->verification.mismatches) : std::string("not read back"));
 		std::println("             {}", report->verification.note);
 		std::println("validation:  {}", report->validation);
 		if (a.report) {

@@ -202,7 +202,9 @@ namespace {
 			disks = std::move(*on);
 			return e_place::placed;
 		}
-		return why == ERROR_NOT_READY || why == ERROR_NO_MEDIA_IN_DRIVE ? e_place::empty : e_place::unknown;
+		// no medium: only believed of a removable slot (a card reader), anything else fails closed
+		const bool no_medium = why == ERROR_NOT_READY || why == ERROR_NO_MEDIA_IN_DRIVE;
+		return no_medium && GetDriveTypeW(name.c_str()) == DRIVE_REMOVABLE ? e_place::empty : e_place::unknown;
 	}
 
 	// says on every drive what couldn't be found out, which drive_blockers() refuses erasure on

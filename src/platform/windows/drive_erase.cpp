@@ -95,6 +95,9 @@ storage::Result<storage::SanitizeReport> storage::DriveOverwriteBackend::execute
 	if (size == 0 || sector == 0 || chunk % sector != 0 || size % sector != 0 || now->capabilities.sector_size != sector)
 		return fail(Errc::unsupported, "erasing a drive: its size or sector size isn't usable, nothing was written");
 
+	// the volumes taken offline in 4: declared before the drive, so the drive is closed before they come back
+	std::vector<t_handle> offline;
+
 	// 3. opened for writing, and asked on that handle
 	t_handle drive(CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
 		FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, nullptr));
@@ -118,7 +121,6 @@ storage::Result<storage::SanitizeReport> storage::DriveOverwriteBackend::execute
 		return std::unexpected(Error{ volumes.error().code, "erasing a drive: its volumes couldn't all be found, nothing was written", volumes.error().os_error });
 	if (volumes->size() != now->capabilities.volumes.size())
 		return fail(Errc::mismatch, "erasing a drive: its volumes changed since it was listed, nothing was written");
-	std::vector<t_handle> offline;
 	for (const std::wstring& volume : *volumes) {
 		t_handle handle(CreateFileW(volume.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr));
 		if (!handle.ok())
@@ -193,10 +195,18 @@ storage::Result<storage::SanitizeReport> storage::DriveOverwriteBackend::execute
 		return end(flushed ? SanitizeStatus::completed : SanitizeStatus::indeterminate);
 	}
 	Verification& v = r.verification;
+	// a read back that ends early still counts what it found: a sector that read back wrong fails the run, however it ended
+	auto stopped_early = [&](SanitizeStatus otherwise) {
+		if (v.mismatches != 0) {
+			r.errors.push_back(std::format("{} sectors of the {} bytes read back didn't read back as written, the first at byte {}", v.mismatches, v.bytes_checked, v.first_mismatch));
+			return end(SanitizeStatus::failed);
+		}
+		return end(otherwise);
+	};
 	for (std::uint64_t pos = 0; pos < size;) {
 		if (cancel && cancel->cancelled()) {
 			v.note = std::format("reading back was stopped at byte {}, as asked: the write finished, what it left wasn't all checked", pos);
-			return end(flushed ? SanitizeStatus::completed : SanitizeStatus::indeterminate);
+			return stopped_early(flushed ? SanitizeStatus::completed : SanitizeStatus::indeterminate);
 		}
 		const DWORD length = static_cast<DWORD>(std::min<std::uint64_t>(chunk, size - pos));
 		OVERLAPPED where = at(pos);
@@ -206,7 +216,7 @@ storage::Result<storage::SanitizeReport> storage::DriveOverwriteBackend::execute
 			const DWORD error = ok ? 0 : GetLastError();
 			r.errors.push_back(std::format("reading back at byte {} failed (os error {})", pos, error));
 			v.note = "it couldn't all be read back: whether it worked can't be told";
-			return end(went_away() ? SanitizeStatus::interrupted : SanitizeStatus::indeterminate);
+			return stopped_early(went_away() ? SanitizeStatus::interrupted : SanitizeStatus::indeterminate);
 		}
 		sanitation::pattern(std::span(expected.data, length), pos, plan.request);
 		for (DWORD s = 0; s < length; s += sector)
