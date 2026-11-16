@@ -133,3 +133,7 @@ set_tests_properties(cli_image PROPERTIES FIXTURES_REQUIRED disk_images)
 if(WIN32)
     cli_test(drives "drives" "drive +size +bus +model\n.*PhysicalDrive[0-9]")
 endif()
+
+# erasure, simulated drives and test image files only: plans, confirmations, a lying drive, a JSON report, real drives refused
+add_test(NAME cli_erase
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/erased -P ${CMAKE_CURRENT_SOURCE_DIR}/check_erase.cmake)

@@ -1,6 +1,7 @@
 // fenrir-cli: the debug and test interface to the storage engine. it opens disk images read-only and says what's in
-// them. the only files it writes are new ones: recovered files (recover) and a copy of a disk with its map (image).
-// nothing it does can change a source
+// them. the files it writes are new ones, recovered files (recover) and a copy of a disk with its map (image), and a
+// disposable test image it's told to erase (erase run, after a typed confirmation). nothing it does can change a source,
+// and nothing in it can write to a drive
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -30,8 +31,11 @@
 #include "storage/file_image_source.h"
 #include "storage/hash.h"
 #include "storage/hex_dump.h"
+#include "storage/image_erase.h"
 #include "storage/mapped_image.h"
 #include "storage/partition.h"
+#include "storage/sanitize.h"
+#include "storage/simulated_drive.h"
 
 namespace {
 	constexpr std::string_view version = "0.0.1";
@@ -69,6 +73,15 @@ namespace {
 			"                                       commands read an image together with its map\n"
 			"  map <file>                           what a map says was copied, and where the bad areas are\n"
 			"  drives                               the physical drives, their volumes, and which has Windows on it\n"
+			"  erase plan <target> [--method M] [--random] [--seed N] [--no-verify]\n"
+			"                                       what erasing would do, what it may be called at most, and what\n"
+			"                                       it can't promise. nothing is done. <target> is a simulated drive\n"
+			"                                       (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash) or a disposable\n"
+			"                                       test image file. real drives can't be erased in this build (P8)\n"
+			"  erase run <target> --confirm \"ERASE ...\" [the same] [--report dir] [--fault F]...\n"
+			"                                       do it, after typing the confirmation the plan asks for. --report\n"
+			"                                       writes a JSON report. simulated faults: fail-at=0.5,\n"
+			"                                       power-loss-at=0.3, lies, unreadable\n"
 			"\n"
 			"  any <image> can be a drive, \\\\.\\PhysicalDriveN (see drives), opened read-only: that needs\n"
 			"  administrator rights. nothing is ever written to a drive being read, image and recover refuse a\n"
@@ -805,6 +818,10 @@ namespace {
 		std::optional<std::uint64_t> cluster_size, retries, max_errors;
 		std::optional<std::uint64_t> size;
 		bool no_trim = false, no_scrape = false;
+		std::optional<std::filesystem::path> method, confirm, report; // erase
+		std::vector<std::string> faults;
+		std::optional<std::uint64_t> seed;
+		bool random_pattern = false, no_verify = false;
 	};
 
 	t_args parse(const std::vector<std::filesystem::path>& args) {
@@ -829,6 +846,28 @@ namespace {
 					out.size = v;
 				else
 					out.ids.push_back(*v);
+			} else if (a == "--method" || a == "--confirm" || a == "--report" || a == "--fault") {
+				if (i + 1 >= args.size()) {
+					out.bad = true;
+					continue;
+				}
+				const std::filesystem::path& v = args[++i];
+				if (a == "--method")
+					out.method = v;
+				else if (a == "--confirm")
+					out.confirm = v;
+				else if (a == "--report")
+					out.report = v;
+				else
+					out.faults.emplace_back(utf8(v.u8string()));
+			} else if (a == "--seed") {
+				out.seed = i + 1 < args.size() ? number(args[++i]) : std::nullopt;
+				out.random_pattern = true;
+				out.bad |= !out.seed;
+			} else if (a == "--random") {
+				out.random_pattern = true;
+			} else if (a == "--no-verify") {
+				out.no_verify = true;
 			} else if (a == "--map") {
 				if (i + 1 < args.size())
 					out.map = args[++i];
@@ -853,6 +892,168 @@ namespace {
 			}
 		}
 		return out;
+	}
+
+	// erase plan|run: a simulated drive (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash) or a disposable test image
+	// file. a drive is refused: erasing real drives is milestone P8, and there's no code here that could
+	int erase(bool run, const std::filesystem::path& target_path, const t_args& a) {
+		const std::string target_text(utf8(target_path.u8string()));
+		if (storage::physical_drive_number(target_path) || storage::is_device_path(target_path)) {
+			std::println(stderr, "error: real drives can't be erased in this build. that's milestone P8, after an independent review;");
+			std::println(stderr, "       there's no code here that could. erase works on simulated drives (sim:hdd...) and test image files");
+			return 1;
+		}
+
+		std::optional<storage::SimulatedDrive> simulated;
+		std::optional<storage::TestImageBackend> image;
+		storage::ISanitizationBackend* backend = nullptr;
+		if (target_text.starts_with("sim:")) {
+			storage::SimulatedFaults faults;
+			for (const std::string& f : a.faults) {
+				const auto value = [&](std::string_view key) -> std::optional<double> {
+					if (!f.starts_with(key))
+						return std::nullopt;
+					const std::string text = f.substr(key.size());
+					double v = 0;
+					const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), v);
+					return error == std::errc() && end == text.data() + text.size() && v >= 0 && v <= 1 ? std::optional(v) : std::nullopt;
+				};
+				if (const auto v = value("fail-at="))
+					faults.fail_at = v;
+				else if (const auto p = value("power-loss-at="))
+					faults.power_loss_at = p;
+				else if (f == "lies")
+					faults.lies = true;
+				else if (f == "unreadable")
+					faults.unreadable_after = true;
+				else {
+					std::println(stderr, "error: no such fault: {} (fail-at=F, power-loss-at=F, lies, unreadable)", f);
+					return 2;
+				}
+			}
+			simulated = storage::SimulatedDrive::make(target_text.substr(4), faults);
+			if (!simulated) {
+				std::println(stderr, "error: no simulated drive called {} (sim:hdd, sim:sata-ssd, sim:nvme-ssd, sim:usb-flash)", target_text);
+				return 2;
+			}
+			backend = &*simulated;
+		} else {
+			if (!a.faults.empty()) {
+				std::println(stderr, "error: faults are only for simulated drives");
+				return 2;
+			}
+			image.emplace(target_path);
+			backend = &*image;
+		}
+
+		auto target = backend->inspect();
+		if (!target) {
+			print_error(target.error());
+			return 1;
+		}
+		storage::SanitizeRequest request;
+		if (a.method) {
+			const auto method = storage::method_from(utf8(a.method->u8string()));
+			if (!method) {
+				std::println(stderr, "error: no method called {}", utf8(a.method->u8string()));
+				return 2;
+			}
+			request.method = *method;
+		}
+		request.zeros = !a.random_pattern;
+		request.seed = a.seed.value_or(0x5EED);
+		request.verify = !a.no_verify;
+
+		const storage::TargetIdentity& id = target->identity;
+		std::println("target:      {}{}", target_text, simulated ? "  (simulated, in memory: no hardware is touched)" : "  (a test image file)");
+		std::println("media:       {}, {} bytes ({})", storage::to_string(id.media), id.size, human_size(id.size));
+		if (!id.model.empty())
+			std::println("drive:       {}, serial {}", id.model, id.serial);
+		std::string supports;
+		for (storage::Method m : target->capabilities.methods)
+			supports += (supports.empty() ? "" : ", ") + std::string(storage::to_string(m));
+		std::println("supports:    {}", supports);
+		std::println("method:      {}", storage::to_string(request.method));
+
+		const auto planned = storage::plan_sanitize(*target, request);
+		if (const auto* refusal = std::get_if<storage::PlanRefusal>(&planned)) {
+			std::println("");
+			std::println("refused, nothing was done:");
+			for (const std::string& r : refusal->reasons)
+				std::println("  - {}", r);
+			return 1;
+		}
+		const storage::SanitizePlan& plan = std::get<storage::SanitizePlan>(planned);
+		std::println("at most:     {}", storage::to_string(plan.category));
+		std::println("scope:       {}", plan.scope);
+		std::println("can stop:    {}", plan.cancellable ? "yes, partway (what's done stays done)" : "no, not once it's accepted");
+		std::println("");
+		std::println("steps:");
+		for (const std::string& s : plan.steps)
+			std::println("  - {}", s);
+		std::println("can't promise:");
+		for (const std::string& c : plan.caveats)
+			std::println("  - {}", c);
+
+		if (!run) {
+			std::println("");
+			std::println("nothing was done. to do it: fenrir-cli erase run {} ... --confirm \"{}\"", target_text, plan.confirmation);
+			return 0;
+		}
+		if (!a.confirm) {
+			std::println(stderr, "");
+			std::println(stderr, "not done: it needs --confirm \"{}\", typed out", plan.confirmation);
+			return 1;
+		}
+		auto approved = storage::authorize(plan, backend->inspect().value_or(storage::Target{}).identity, utf8(a.confirm->u8string()));
+		if (!approved) {
+			print_error(approved.error());
+			return 1;
+		}
+
+		storage::CancellationToken cancel;
+		interrupt_target = &cancel;
+#ifdef _WIN32
+		SetConsoleCtrlHandler(on_interrupt, TRUE);
+#else
+		std::signal(SIGINT, on_interrupt);
+#endif
+		storage::Result<storage::SanitizeReport> report;
+		{
+			t_percent percent("erasing");
+			report = backend->execute(*approved, &cancel, percent.sink());
+		}
+#ifdef _WIN32
+		SetConsoleCtrlHandler(on_interrupt, FALSE);
+#else
+		std::signal(SIGINT, SIG_DFL);
+#endif
+		interrupt_target = nullptr;
+		if (!report) {
+			print_error(report.error());
+			std::println(stderr, "nothing was done");
+			return 1;
+		}
+
+		std::println("");
+		std::println("status:      {}", storage::to_string(report->status));
+		std::println("done:        {} bytes", report->bytes_done);
+		for (const std::string& e : report->events)
+			std::println("  - {}", e);
+		for (const std::string& e : report->errors)
+			std::println("  ! {}", e);
+		std::println("checked:     {}", report->verification.done ? std::format("{} bytes, {} sectors wrong", report->verification.bytes_checked, report->verification.mismatches) : "not read back");
+		std::println("             {}", report->verification.note);
+		std::println("validation:  {}", report->validation);
+		if (a.report) {
+			auto written = storage::write_report(*a.report, "fenrir erase report.json", storage::to_json(*report));
+			if (!written) {
+				print_error(written.error());
+				return 1;
+			}
+			std::println("report:      {}", utf8(written->u8string()));
+		}
+		return report->status == storage::SanitizeStatus::verified || report->status == storage::SanitizeStatus::completed ? 0 : 1;
 	}
 
 	int run(const std::vector<std::filesystem::path>& args) {
@@ -911,6 +1112,8 @@ namespace {
 		}
 		if (command == "map" && n == 1)
 			return show_map(a.positional[0]);
+		if (command == "erase" && n == 2 && (a.positional[0] == "plan" || a.positional[0] == "run"))
+			return erase(a.positional[0] == "run", a.positional[1], a);
 		usage();
 		return 2;
 	}
