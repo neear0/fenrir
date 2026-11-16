@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P5
+## Status: P6, imaging (drives not yet)
 
 | | |
 |---|---|
@@ -28,6 +28,9 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | NTFS: every MFT record (update sequences checked), resident and non-resident data, files in pieces, sparse files, alternate data streams, extension records, the tree rebuilt from parent references with $OrphanFiles for what's lost its directory, $MFTMirr and the backup boot sector | done, tested on a synthetic volume |
 | NTFS compressed and EFS-encrypted files | listed, said to be unsupported, not exported |
 | Picture previews | not yet |
+| Imaging: `fenrir-cli image` copies a disk image into a new one with a GNU ddrescue mapfile. It copies what reads easily first, then trims and scrapes around what didn't, then retries; ctrl+c stops it with the map saved, and it goes on from its own map or one ddrescue made | done, tested with injected read failures, flaky sectors and a crash at every map save |
+| Images with a map next to them are read through it: what wasn't copied fails as unreadable instead of reading as the zeros the image has there, and found files that run into it are cut short | done, tested |
+| Imaging drives (`\\.\PhysicalDriveN`), and imaging from the window | not yet, the rest of P6 |
 | Erasure | not in this build, no code here can write to a drive |
 
 ### The window
@@ -52,6 +55,8 @@ fenrir-cli recover disk.img D:\recovered --carved
 ```
 
 A damaged table doesn't stop `partitions`: it lists what it could still read and notes what's wrong, e.g. a primary GPT that fails its CRC (the backup is used), a truncated image (partitions past the end are marked) or an MBR whose extended partition chain loops.
+
+`image` never writes over a file: the image has to be new, or the one its map was made with (checked against samples of the source). The map is replaced whole each time it's saved, and the image is flushed first, so after a crash the map can be behind the image but never ahead of it. What couldn't be read stays zeros in the image and is marked in the map, so keep the two together: every other command, and the window, reads `disk.img` through `disk.map` (or `disk.img.map`) when it's there.
 
 ### How recoverable a deleted FAT32 file is
 
@@ -133,7 +138,7 @@ What it builds, in `build/vs2022/<Debug|Release>/`:
 | `storage_tests` | `tests/.../storage_tests.exe` | doctest unit tests |
 | `make_fixtures` | `tests/.../fenrir-make-fixtures.exe` | writes the test disk images, run by CTest |
 
-CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter, and if the exporter could replace a file. `cli_recover_matches_originals`, `cli_recover_exfat_matches_originals` and `cli_recover_ntfs_matches_originals` recover the deleted files from the FAT32, exFAT and NTFS test images and check each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk. The session's unit tests run its real threads on an image file: a scan, an export and its report, a preview, a deep scan stopped and gone on with.
+CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions an API that can write to a file or a device anywhere but the exporter and the imager, if the exporter could replace a file, and if the imager could create a file that's already there or cut one short. `cli_image` images a test disk and checks the copy, going on from its map, refusing a name that's taken, and imaging an image whose own map has a bad sector. `cli_recover_matches_originals`, `cli_recover_exfat_matches_originals` and `cli_recover_ntfs_matches_originals` recover the deleted files from the FAT32, exFAT and NTFS test images and check each against its original with CMake's own SHA-256, and `cli_recover_carved_matches_originals` does the same for the carving test disk. The session's unit tests run its real threads on an image file: a scan, an export and its report, a preview, a deep scan stopped and gone on with.
 
 ## Layout
 
@@ -147,7 +152,8 @@ src/fs/fat32/      the FAT32 scanner
 src/fs/exfat/      the exFAT scanner
 src/fs/ntfs/       the NTFS scanner
 src/carving/       the signature scan and a validator per format
-src/export/        the exporter and the export report, the only code in the engine that writes
+src/export/        the exporter and the export report
+src/imaging/       the imager, its ddrescue map and images read through their maps. with the exporter, the only code that writes
 src/session/       a recovery session: scans and exports on worker threads, read as snapshots
 src/cli/           fenrir-cli
 tests/             unit tests, cli tests and the write-API check
@@ -160,6 +166,8 @@ cmake/             fenrir's targets
 ## Rules this code keeps
 
 - Recovery never writes to the source. Image files are opened read-only, and on Windows nothing else can open them for writing while they're open.
+- Two places in the engine write, and `tests/check_no_write_apis.cmake` keeps it that way: the exporter (new files only) and the imager (a new image, or the one its map was made with, and the map itself). Neither ever writes over a file it didn't make.
+- What wasn't read is never taken for zeros: an image's map goes with it everywhere it's read.
 - Device paths (`\\.\PhysicalDrive0`, `\\?\Volume{...}`) are refused by the image reader. Reading drives directly gets its own reviewed source later.
 - No erasure code exists until the simulator (P7). Real drives come last (P8), after an independent review.
 - No telemetry and no uploads.

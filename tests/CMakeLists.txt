@@ -117,3 +117,10 @@ add_test(NAME cli_recover_carved_matches_originals
     COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/carve.img -DORIGINALS=${images}/carve_originals
         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/carved -DEXTRA=--carved -DMIN=12 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_recover.cmake)
 set_tests_properties(cli_recover_carved_matches_originals PROPERTIES FIXTURES_REQUIRED disk_images)
+
+# imaging: a copy and its map, going on from the map, never writing over a file, and what the source's own map says
+# couldn't be read staying unread in the copy
+add_test(NAME cli_image
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/fat32.img -DOUT=${CMAKE_CURRENT_BINARY_DIR}/imaged
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_image.cmake)
+set_tests_properties(cli_image PROPERTIES FIXTURES_REQUIRED disk_images)

@@ -1,5 +1,6 @@
-// fenrir-cli: the read-only debug and test interface to the storage engine. it opens disk images and says what's in them,
-// it has no command that changes anything
+// fenrir-cli: the debug and test interface to the storage engine. it opens disk images read-only and says what's in
+// them. the only files it writes are new ones: recovered files (recover) and a copy of a disk with its map (image).
+// nothing it does can change a source
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -7,10 +8,12 @@
 #include <Windows.h>
 #include <io.h>
 #else
+#include <csignal>
 #include <unistd.h>
 #endif
 
 #include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
@@ -55,6 +58,15 @@ namespace {
 			"                                       can be, or the ids given.\n"
 			"                                       nothing in dir is ever replaced. dir shouldn't be on the drive\n"
 			"                                       the image came from, if that drive is the one being recovered\n"
+			"  image <source> <image> [--map file] [--retries N] [--no-trim] [--no-scrape] [--max-errors N]\n"
+			"        [--sector-size N] [--cluster-size N]\n"
+			"                                       copy source into a new image file, with a map (ddrescue's mapfile,\n"
+			"                                       image.map unless --map says) of what was copied and what couldn't\n"
+			"                                       be read. what reads easily first, then closer and closer around\n"
+			"                                       what didn't. ctrl+c stops it with the map saved: the same command\n"
+			"                                       goes on from there, as it does from a map ddrescue made. the other\n"
+			"                                       commands read an image together with its map\n"
+			"  map <file>                           what a map says was copied, and where the bad areas are\n"
 			"  --version                            print the version\n");
 	}
 
@@ -567,18 +579,169 @@ namespace {
 		return export_all(*carving->source, chosen, destination);
 	}
 
+	// ctrl+c while imaging: the copy stops at the next read and saves its map, instead of the process just ending
+	storage::CancellationToken* interrupt_target = nullptr;
+
+#ifdef _WIN32
+	BOOL WINAPI on_interrupt(DWORD kind) {
+		if ((kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT) && interrupt_target) {
+			interrupt_target->cancel();
+			return TRUE;
+		}
+		return FALSE;
+	}
+#else
+	extern "C" void on_interrupt(int) {
+		if (interrupt_target)
+			interrupt_target->cancel();
+	}
+#endif
+
+	std::string_view to_text(storage::ImagingPhase phase) {
+		switch (phase) {
+		case storage::ImagingPhase::copying: return "copying";
+		case storage::ImagingPhase::trimming: return "trimming";
+		case storage::ImagingPhase::scraping: return "scraping";
+		case storage::ImagingPhase::retrying: return "retrying";
+		case storage::ImagingPhase::finished: return "finished";
+		}
+		return "?";
+	}
+
+	// one line on stderr, rewritten a few times a second, when it's a terminal
+	class t_imaging_progress final : public storage::ImagingObserver {
+	public:
+		void update(const storage::ImagingStatus& s, const storage::ImageMap&) noexcept override {
+			const auto now = std::chrono::steady_clock::now();
+			if (!shown_ || now - last_ < std::chrono::milliseconds(250))
+				return;
+			last_ = now;
+			const std::uint64_t percent = s.size ? s.finished * 100 / s.size : 100;
+			std::print(stderr, "\r{} pass {}: {}% copied, {} bad, {} not read yet, {} read errors   ", to_text(s.phase), s.pass, percent,
+				human_size(s.bad), human_size(s.unknown), s.read_errors);
+		}
+		~t_imaging_progress() override {
+			if (shown_)
+				std::print(stderr, "\r{:79}\r", "");
+		}
+
+	private:
+		bool shown_ = terminal(stderr);
+		std::chrono::steady_clock::time_point last_{};
+	};
+
+	struct t_image_options {
+		std::optional<std::filesystem::path> mapfile;
+		storage::ImagingOptions imaging;
+	};
+
+	void print_map(const storage::ImageMap& map) {
+		const std::uint64_t size = map.size();
+		auto share = [size](std::uint64_t bytes) { return std::format("{:>14} bytes  {:>10}  {:5.1f}%", bytes, human_size(bytes), size ? bytes * 100.0 / static_cast<double>(size) : 0.0); };
+		std::println("copied:      {}", share(map.bytes(storage::BlockStatus::finished)));
+		std::println("bad:         {}", share(map.bytes(storage::BlockStatus::bad)));
+		std::println("not read:    {}", share(map.unknown_bytes()));
+		if (map.unknown_bytes() != 0)
+			std::println("             ({} not tried, {} failed in a large read, {} between bad sectors)", human_size(map.bytes(storage::BlockStatus::non_tried)),
+				human_size(map.bytes(storage::BlockStatus::non_trimmed)), human_size(map.bytes(storage::BlockStatus::non_scraped)));
+	}
+
+	int image(const std::filesystem::path& source_path, const std::filesystem::path& destination, const t_image_options& options) {
+		auto source = open(source_path);
+		if (!source)
+			return 1;
+		const std::filesystem::path mapfile = options.mapfile.value_or(storage::default_map_path(destination));
+		std::println("source:      {}, {} bytes ({})", utf8(source_path.u8string()), source->size_bytes(), human_size(source->size_bytes()));
+		std::println("image:       {}", utf8(destination.u8string()));
+		std::println("map:         {}", utf8(mapfile.u8string()));
+
+		storage::CancellationToken cancel;
+		interrupt_target = &cancel;
+#ifdef _WIN32
+		SetConsoleCtrlHandler(on_interrupt, TRUE);
+#else
+		std::signal(SIGINT, on_interrupt);
+#endif
+		storage::Result<storage::ImagingStatus> status;
+		{
+			t_imaging_progress progress;
+			status = storage::acquire_image(*source, destination, mapfile, options.imaging, &cancel, &progress);
+		}
+#ifdef _WIN32
+		SetConsoleCtrlHandler(on_interrupt, FALSE);
+#else
+		std::signal(SIGINT, SIG_DFL);
+#endif
+		interrupt_target = nullptr;
+
+		if (status && status->resumed)
+			std::println("             (went on from the copy it describes)");
+		if (auto map = storage::load_map(mapfile)) {
+			std::println("");
+			print_map(*map);
+		}
+		if (!status) {
+			if (status.error().code == storage::Errc::cancelled) {
+				std::println(stderr, "stopped. the map is saved: the same command goes on from where it stopped");
+				return 1;
+			}
+			print_error(status.error());
+			if (status.error().code == storage::Errc::exists)
+				std::println(stderr, "nothing is ever written over: pick an image name that isn't taken, or keep its map next to it to go on with it");
+			else if (status.error().code == storage::Errc::mismatch)
+				std::println(stderr, "the image, its map and the source have to be the ones the copy started with");
+			return 1;
+		}
+		std::println("");
+		if (status->bad == 0 && status->unknown == 0)
+			std::println("done, all of it copied");
+		else
+			std::println("done. what wasn't copied is zeros in the image, and only its map says so: keep the map next to it, fenrir reads the two together");
+		return 0;
+	}
+
+	int show_map(const std::filesystem::path& mapfile) {
+		auto map = storage::load_map(mapfile);
+		if (!map) {
+			print_error(map.error());
+			return 1;
+		}
+		std::println("map:         {}", utf8(mapfile.u8string()));
+		std::println("disk:        {} bytes ({})", map->size(), human_size(map->size()));
+		std::println("state:       {}{}, at byte {}", to_text(map->phase), map->phase == storage::ImagingPhase::finished ? "" : std::format(" pass {}", map->pass), map->current_pos);
+		print_map(*map);
+		std::size_t shown = 0, bad = 0;
+		for (const storage::MapBlock& b : map->blocks())
+			if (b.status == storage::BlockStatus::bad) {
+				if (bad++ == 0) {
+					std::println("");
+					std::println("bad areas:           offset            bytes");
+				}
+				if (shown < 50) {
+					std::println("             {:>16}  {:>15}", b.pos, b.size);
+					shown++;
+				}
+			}
+		if (bad > shown)
+			std::println("             and {} more", bad - shown);
+		return 0;
+	}
+
 	struct t_args {
 		std::vector<std::filesystem::path> positional;
 		std::optional<std::uint64_t> partition, sector_size;
 		std::vector<std::uint64_t> ids;
 		bool all = false, why = false, carved = false, every_byte = false, bad = false;
+		std::optional<std::filesystem::path> map;
+		std::optional<std::uint64_t> cluster_size, retries, max_errors;
+		bool no_trim = false, no_scrape = false;
 	};
 
 	t_args parse(const std::vector<std::filesystem::path>& args) {
 		t_args out;
 		for (std::size_t i = 1; i < args.size(); i++) {
 			const std::filesystem::path& a = args[i];
-			if (a == "--partition" || a == "--sector-size" || a == "--id") {
+			if (a == "--partition" || a == "--sector-size" || a == "--id" || a == "--cluster-size" || a == "--retries" || a == "--max-errors") {
 				const std::optional<std::uint64_t> v = i + 1 < args.size() ? number(args[++i]) : std::nullopt;
 				if (!v)
 					out.bad = true;
@@ -586,8 +749,23 @@ namespace {
 					out.partition = v;
 				else if (a == "--sector-size")
 					out.sector_size = v;
+				else if (a == "--cluster-size")
+					out.cluster_size = v;
+				else if (a == "--retries")
+					out.retries = v;
+				else if (a == "--max-errors")
+					out.max_errors = v;
 				else
 					out.ids.push_back(*v);
+			} else if (a == "--map") {
+				if (i + 1 < args.size())
+					out.map = args[++i];
+				else
+					out.bad = true;
+			} else if (a == "--no-trim") {
+				out.no_trim = true;
+			} else if (a == "--no-scrape") {
+				out.no_scrape = true;
 			} else if (a == "--all") {
 				out.all = true;
 			} else if (a == "--carved") {
@@ -645,6 +823,19 @@ namespace {
 			return recover_carved(a.positional[0], a.positional[1], a.partition, a.every_byte, a.ids);
 		if (command == "recover" && n == 2)
 			return recover(a.positional[0], a.positional[1], a.partition, a.ids);
+		if (command == "image" && n == 2 && a.sector_size.value_or(0) <= 65536 && a.cluster_size.value_or(0) <= (64u << 20) && a.retries.value_or(0) <= 1000) {
+			t_image_options o;
+			o.mapfile = a.map;
+			o.imaging.sector_size = static_cast<std::uint32_t>(a.sector_size.value_or(512));
+			o.imaging.cluster_size = static_cast<std::uint32_t>(a.cluster_size.value_or(65536));
+			o.imaging.retries = static_cast<unsigned>(a.retries.value_or(0));
+			o.imaging.max_read_errors = a.max_errors.value_or(0);
+			o.imaging.trim = !a.no_trim;
+			o.imaging.scrape = !a.no_scrape;
+			return image(a.positional[0], a.positional[1], o);
+		}
+		if (command == "map" && n == 1)
+			return show_map(a.positional[0]);
 		usage();
 		return 2;
 	}
