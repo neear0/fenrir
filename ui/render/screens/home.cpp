@@ -9,7 +9,7 @@ void fenrir::screens::home() {
     widgets::text("Recover opens a disk image read-only, finds deleted files on FAT32, exFAT and NTFS, carves JPEG, PNG,");
     widgets::text("PDF and ZIP files by their content, says how whole each one is and why, and exports them.");
     widgets::text("Every file it writes is new, and each export leaves a report with every file's SHA-256.");
-    widgets::text("Erasure isn't in this build. No code in it can write to a drive.");
+    widgets::text("Erase plans and runs erasure on simulated drives and disposable test images. No code in it can write to a drive.");
     widgets::text("Nothing leaves this computer: no telemetry, no uploads.");
     render::groupbox::end();
 

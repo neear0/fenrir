@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P6, imaging
+## Status: P7, erasure simulated
 
 | | |
 |---|---|
@@ -33,11 +33,15 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Imaging in the window: **Images → Make an image** copies a disk image on a worker thread, with its map drawn as a bar, **Stop** and **Go on** | done, the session unit tested, the page looked at by hand |
 | Drives: `fenrir-cli drives` lists them without administrator rights (model, serial, bus, volumes, which one Windows is on); any command reads `\\.\PhysicalDriveN` read-only as administrator, the window lists them on **Images** to copy one, and offers to restart as administrator | done; reading tested on a 29 GiB USB stick (an image of its first 256 MiB hashes the same as the drive, imaging onto the stick itself is refused) |
 | Real-hardware failures (a drive with bad sectors, unplugged mid-copy) | only simulated so far, with the fault-injecting source |
-| Erasure | not in this build, no code here can write to a drive |
+| Erasure policy: what a method may be called on a medium (clear, purge, limited clear, none), a dry-run plan with what it can't promise, refusals with every reason (unsupported method with nothing else tried, system or mounted drive, ATA frozen or locked), approval by typed confirmation with the target checked again before anything runs | done, tested |
+| Erasure on a simulated drive (HDD, SATA SSD, NVMe SSD, USB stick) with faults to order: failing partway, power loss (a firmware sanitize finishes at the next power on), firmware that lies, unreadable afterwards, swapped between approval and running | done, tested: every fault ends in the status it is, never in success |
+| Erasure of disposable test image files: overwritten, flushed, read back, with a JSON report | done, tested (changed since approval, open in another program, stopped partway) |
+| Erase in the window and `fenrir-cli erase plan / run` | done, the window tried by hand on a simulated drive |
+| Erasing real drives | not in this build: P8, after an independent review. No code here can write to a drive |
 
 ### The window
 
-**Recover → Open an image...** (or `fenrir.exe disk.img`, or *Open with*) opens a raw disk image read-only and scans it: the partition table, every FAT32, exFAT and NTFS volume's records, then, with **Deep scan** on, the whole image for files by their content. Files show up while it runs, **Stop** stops it, and a stopped deep scan can **go on** from where it was. Pick a file to see where it was found, why it has its status, and its first bytes. **Choose where to export**, then export what the filters show or the picked file: files a filesystem still lists keep their names under a folder per partition, carved ones go under `carved/`, and `fenrir report.txt` lists every file with its status, SHA-256 and reasons. **Images** makes images (a copy of a disk image into a new file with its map, drawn as a bar while it runs: **Stop** saves the map and **Go on** carries on from it) and shows the open image's partition table, its map when it has one, and everything the scan noticed. **Reports** shows the last export.
+**Recover → Open an image...** (or `fenrir.exe disk.img`, or *Open with*) opens a raw disk image read-only and scans it: the partition table, every FAT32, exFAT and NTFS volume's records, then, with **Deep scan** on, the whole image for files by their content. Files show up while it runs, **Stop** stops it, and a stopped deep scan can **go on** from where it was. Pick a file to see where it was found, why it has its status, and its first bytes. **Choose where to export**, then export what the filters show or the picked file: files a filesystem still lists keep their names under a folder per partition, carved ones go under `carved/`, and `fenrir report.txt` lists every file with its status, SHA-256 and reasons. **Images** makes images (a copy of a disk image into a new file with its map, drawn as a bar while it runs: **Stop** saves the map and **Go on** carries on from it) and shows the open image's partition table, its map when it has one, and everything the scan noticed. **Erase** plans erasure for a simulated drive (faults included) or a test image file, shows what it may be called and what it can't promise, and runs it once the right confirmation is picked out of four look-alikes (there's no text field in CelosUI yet to type it, as `fenrir-cli erase` asks), then shows the report and saves it as JSON. **Reports** shows the last export.
 
 Everything that reads the image or writes a file runs in `storage::RecoverySession`, on its own threads: the window only draws snapshots of it and asks it to start and stop things.
 
@@ -61,6 +65,10 @@ fenrir-cli drives                            the physical drives, their volumes,
 fenrir-cli image \\.\PhysicalDrive2 D:\usb.img   image a drive (as administrator: reading a drive needs it)
 fenrir-cli files \\.\PhysicalDrive2          any command reads a drive the same way, read-only
 fenrir-cli hash \\.\PhysicalDrive2 --size 268435456   --size: only the first N bytes of an image or drive
+fenrir-cli erase plan sim:nvme-ssd --method nvme-sanitize-crypto   what erasing would do and may be called; nothing is done
+fenrir-cli erase run sim:hdd --confirm "ERASE 000001" --report out   run it on a simulated drive, with a JSON report
+fenrir-cli erase run sim:nvme-ssd --method nvme-sanitize-block --fault lies --confirm "ERASE 000003"   reading back catches it
+fenrir-cli erase run test.img --confirm "ERASE test.img"   overwrite a disposable test image, then read it back
 ```
 
 A drive is opened for reading only and read as it is, while Windows keeps using it: a drive that's in use, or failing, is better imaged first and the image scanned. `image` and `recover` refuse a destination on the drive being read, and one whose drive can't be told (a network share counts as no drive).
@@ -165,6 +173,7 @@ src/fs/ntfs/       the NTFS scanner
 src/carving/       the signature scan and a validator per format
 src/export/        the exporter and the export report
 src/imaging/       the imager, its ddrescue map and images read through their maps. with the exporter, the only code that writes
+src/sanitation/    erasure: the policy, plans, approval, the simulated drive, test image overwrite, JSON reports
 src/platform/      physical drives: listing them, reading one, which drive a path is on (windows; elsewhere not yet)
 src/session/       a recovery session: scans and exports on worker threads, read as snapshots
 src/cli/           fenrir-cli
@@ -181,7 +190,7 @@ cmake/             fenrir's targets
 - Two places in the engine write, and `tests/check_no_write_apis.cmake` keeps it that way: the exporter (new files only) and the imager (a new image, or the one its map was made with, and the map itself). Neither ever writes over a file it didn't make.
 - What wasn't read is never taken for zeros: an image's map goes with it everywhere it's read.
 - Drives are read through their own source (`storage::DiskSource`), opened for reading only; the image reader refuses device paths. The only things ever sent to a drive are three queries that change nothing (its description, its size, which drives a volume is on), and `no_write_apis` fails on any other.
-- No erasure code exists until the simulator (P7). Real drives come last (P8), after an independent review.
+- Erasure only reaches simulated drives and test image files (overwritten through the imager's file layer, so `src/sanitation/` has no write api of its own). Real drives come last (P8), after an independent review. A method a target doesn't support is refused, never swapped for another; verified (it did what it should) is never called validated (it's enough for the data), which fenrir never decides.
 - No telemetry and no uploads.
 
 ## Known gaps

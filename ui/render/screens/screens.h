@@ -27,8 +27,8 @@ namespace fenrir::screens {
 	inline constexpr t_page pages[] = {
 		{ "Home", "Overview", nullptr, nullptr, icons::e_icon::home, false, home },
 		{ "Recover", "Deleted and carved files", "Recovery", nullptr, icons::e_icon::recover, false, recover },
-		{ "Images", "Read-only disk images", nullptr, nullptr, icons::e_icon::images, false, images },
-		{ "Erase", "Not in this build", "Erasure", "P7", icons::e_icon::erase, false, erase },
+		{ "Images", "Disk images, imaging", nullptr, nullptr, icons::e_icon::images, false, images },
+		{ "Erase", "Simulator, test images", "Erasure", "SIM", icons::e_icon::erase, false, erase },
 		{ "Reports", "Local logs", "Records", nullptr, icons::e_icon::reports, false, reports },
 		{ "Settings", "Look and feel", nullptr, nullptr, icons::e_icon::settings, true, settings },
 	};

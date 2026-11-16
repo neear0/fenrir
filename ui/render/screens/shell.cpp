@@ -126,8 +126,8 @@ namespace {
         caps(drawlist, card.Min + ImVec2(px(14.f), px(12.f)), "Gleipnir", text(0.42f));
         fenrir::icons::draw(drawlist, e_icon::lock, card.Min + ImVec2(px(23.f), px(48.f)), px(18.f), accent(1.f), px(1.6f));
         ImFont* font_caption = resources::fonts::get("small");
-        render::text::draw(drawlist, card.Min + ImVec2(px(40.f), px(32.f)), text(0.95f), "Read-only build", nullptr, resources::fonts::get("default"));
-        render::text::draw(drawlist, card.Min + ImVec2(px(40.f), px(52.f)), text(0.5f), "Can't write to any drive", nullptr, font_caption);
+        render::text::draw(drawlist, card.Min + ImVec2(px(40.f), px(32.f)), text(0.95f), "Drives: read only", nullptr, resources::fonts::get("default"));
+        render::text::draw(drawlist, card.Min + ImVec2(px(40.f), px(52.f)), text(0.5f), "Nothing can write to one", nullptr, font_caption);
     }
 }
 
@@ -233,7 +233,7 @@ void fenrir::shell::titlebar() {
     // what this build is, right of it, left of the window's buttons
     float x = ui::size.x - px(46.f) * 2.f - px(12.f);
     const std::string stage = std::string(fenrir::app::build_stage) + " build";
-    const char* chips[] = { stage.c_str(), "Read-only" };
+    const char* chips[] = { stage.c_str(), "Drives read-only" };
     for (int i = 0; i < 2; i++) {
         const bool lock = i == 1;
         const ImVec2 size = pill_size(chips[i], lock);
