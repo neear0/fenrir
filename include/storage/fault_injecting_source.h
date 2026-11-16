@@ -26,6 +26,7 @@ namespace storage {
 		std::uint64_t reads() const noexcept { return reads_; } // read_at() calls so far, failed ones included
 
 		std::uint64_t size_bytes() const noexcept override { return inner_.size_bytes(); }
+		std::optional<std::uint32_t> physical_disk() const noexcept override { return inner_.physical_disk(); }
 		Result<std::size_t> read_at(std::uint64_t offset, std::span<std::byte> output) noexcept override;
 
 	private:

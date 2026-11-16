@@ -8,3 +8,6 @@ bool fenrir::app::dialogs::available() { return false; }
 bool fenrir::app::dialogs::showing() { return false; }
 void fenrir::app::dialogs::show(e_kind, int) {}
 std::optional<std::filesystem::path> fenrir::app::dialogs::take(int) { return std::nullopt; }
+
+bool fenrir::app::drives::elevated() { return false; }
+bool fenrir::app::drives::restart_elevated() { return false; }

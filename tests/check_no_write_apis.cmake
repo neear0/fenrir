@@ -7,6 +7,7 @@
 # tools/ isn't either: the fixture generator writes test images, into the build directory ctest gives it.
 # a text search, so it also catches names in comments: say "writing" in prose, not the api.
 # usage: cmake -DROOT=<source dir> -P check_no_write_apis.cmake
+cmake_policy(SET CMP0057 NEW) # if(IN_LIST)
 if(NOT ROOT)
     message(FATAL_ERROR "pass -DROOT=<source dir>")
 endif()
@@ -27,6 +28,11 @@ set(export_dir ${ROOT}/src/export/)
 # writing into the image it made, and replacing its map: only imaging. it can't truncate or replace anything else
 set(imaging_only WriteFile GENERIC_WRITE MoveFile DeleteFile SetFileInformationByHandle O_WRONLY O_RDWR O_CREAT pwrite ftruncate "rename(" unlink "link(")
 set(imaging_dir ${ROOT}/src/imaging/)
+# querying drives: only src/platform/windows/, and only with these three, which change nothing: a drive's description,
+# its size and sector size, and which drives a volume is on. drives are opened there with no access or read access
+set(platform_only DeviceIoControl ioctl) # ioctl: <winioctl.h>, where the query codes are
+set(platform_dir ${ROOT}/src/platform/windows/)
+set(allowed_queries IOCTL_STORAGE_QUERY_PROPERTY IOCTL_DISK_GET_DRIVE_GEOMETRY_EX IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS)
 
 set(found "")
 foreach(source ${sources})
@@ -36,6 +42,17 @@ foreach(source ${sources})
     string(FIND "${source}" "${imaging_dir}" in_imaging)
     if(in_imaging EQUAL 0)
         list(REMOVE_ITEM words ${imaging_only})
+    endif()
+    string(FIND "${source}" "${platform_dir}" in_platform)
+    if(in_platform EQUAL 0)
+        list(REMOVE_ITEM words ${platform_only})
+        string(REGEX MATCHALL "(IOCTL|FSCTL|SMART)_[A-Z0-9_]+" codes "${text}")
+        foreach(code ${codes})
+            if(NOT code IN_LIST allowed_queries)
+                file(RELATIVE_PATH relative ${ROOT} ${source})
+                list(APPEND found "${relative}: ${code}, not one of the queries allowed")
+            endif()
+        endforeach()
     endif()
     if(NOT in_export EQUAL 0)
         list(APPEND words ${export_only})
@@ -90,4 +107,4 @@ if(found)
     list(JOIN found "\n  " report)
     message(FATAL_ERROR "write capable apis outside the reviewed write paths:\n  ${report}")
 endif()
-message(STATUS "no write capable apis outside src/export/ and src/imaging/ in ${count} files")
+message(STATUS "no write capable apis outside src/export/ and src/imaging/, and only the allowed drive queries, in ${count} files")

@@ -4,6 +4,7 @@
 #include <system_error>
 
 #include "storage/bytes.h"
+#include "storage/disks.h"
 #include "storage/file_image_source.h"
 #include "storage/mapped_image.h"
 
@@ -142,4 +143,16 @@ bool storage::mark_unread(RecoveryCandidate& candidate, const ImageMap& map, std
 		return true;
 	}
 	return false;
+}
+
+storage::Result<storage::OpenedImage> storage::open_source(const std::filesystem::path& path) noexcept {
+	const std::optional<std::uint32_t> drive = physical_drive_number(path);
+	if (!drive)
+		return open_image(path);
+	Result<std::unique_ptr<DiskSource>> disk = DiskSource::open(*drive);
+	if (!disk)
+		return std::unexpected(disk.error());
+	OpenedImage out;
+	out.source = std::move(*disk);
+	return out;
 }

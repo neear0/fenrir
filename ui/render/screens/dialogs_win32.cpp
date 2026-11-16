@@ -3,6 +3,7 @@
 #include "app.h"
 
 #include <mutex>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <thread>
 
@@ -106,4 +107,28 @@ std::optional<std::filesystem::path> fenrir::app::dialogs::take(int key) {
 	std::optional<std::filesystem::path> picked = std::move(state->picked);
 	state->picked.reset();
 	return picked;
+}
+
+bool fenrir::app::drives::elevated() {
+	HANDLE token = nullptr;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+		return false;
+	TOKEN_ELEVATION elevation{};
+	DWORD size = 0;
+	const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof elevation, &size) && elevation.TokenIsElevated != 0;
+	CloseHandle(token);
+	return ok;
+}
+
+bool fenrir::app::drives::restart_elevated() {
+	wchar_t exe[MAX_PATH + 1]{};
+	if (!GetModuleFileNameW(nullptr, exe, MAX_PATH))
+		return false;
+	SHELLEXECUTEINFOW run{ sizeof run };
+	run.fMask = SEE_MASK_NOASYNC;
+	run.hwnd = owner();
+	run.lpVerb = L"runas"; // windows asks first, saying fenrir wants administrator rights
+	run.lpFile = exe;
+	run.nShow = SW_SHOWNORMAL;
+	return ShellExecuteExW(&run) != FALSE; // false too when it was turned down
 }

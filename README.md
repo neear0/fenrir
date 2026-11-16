@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P6, imaging (drives not yet)
+## Status: P6, imaging
 
 | | |
 |---|---|
@@ -31,7 +31,8 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Imaging: `fenrir-cli image` copies a disk image into a new one with a GNU ddrescue mapfile. It copies what reads easily first, then trims and scrapes around what didn't, then retries; ctrl+c stops it with the map saved, and it goes on from its own map or one ddrescue made | done, tested with injected read failures, flaky sectors and a crash at every map save |
 | Images with a map next to them are read through it: what wasn't copied fails as unreadable instead of reading as the zeros the image has there, and found files that run into it are cut short | done, tested |
 | Imaging in the window: **Images → Make an image** copies a disk image on a worker thread, with its map drawn as a bar, **Stop** and **Go on** | done, the session unit tested, the page looked at by hand |
-| Imaging drives (`\\.\PhysicalDriveN`) | not yet, the rest of P6 |
+| Drives: `fenrir-cli drives` lists them without administrator rights (model, serial, bus, volumes, which one Windows is on); any command reads `\\.\PhysicalDriveN` read-only as administrator, the window lists them on **Images** to copy one, and offers to restart as administrator | done; reading tested on a 29 GiB USB stick (an image of its first 256 MiB hashes the same as the drive, imaging onto the stick itself is refused) |
+| Real-hardware failures (a drive with bad sectors, unplugged mid-copy) | only simulated so far, with the fault-injecting source |
 | Erasure | not in this build, no code here can write to a drive |
 
 ### The window
@@ -53,7 +54,16 @@ fenrir-cli recover disk.img D:\recovered     copy out every deleted file that ca
 fenrir-cli carve disk.img --why              files found by their content alone, and what each rating is based on
 fenrir-cli carve disk.img --partition 2 --every-byte
 fenrir-cli recover disk.img D:\recovered --carved
+fenrir-cli image disk.img copy.img           copy it into copy.img, with copy.map saying what was copied and what couldn't be read
+fenrir-cli image disk.img copy.img --retries 3   the same, going on from copy.map, then 3 more tries at the bad sectors
+fenrir-cli map copy.map                      what a map says, and where the bad areas are
+fenrir-cli drives                            the physical drives, their volumes, and which one Windows is on
+fenrir-cli image \\.\PhysicalDrive2 D:\usb.img   image a drive (as administrator: reading a drive needs it)
+fenrir-cli files \\.\PhysicalDrive2          any command reads a drive the same way, read-only
+fenrir-cli hash \\.\PhysicalDrive2 --size 268435456   --size: only the first N bytes of an image or drive
 ```
+
+A drive is opened for reading only and read as it is, while Windows keeps using it: a drive that's in use, or failing, is better imaged first and the image scanned. `image` and `recover` refuse a destination on the drive being read, and one whose drive can't be told (a network share counts as no drive).
 
 A damaged table doesn't stop `partitions`: it lists what it could still read and notes what's wrong, e.g. a primary GPT that fails its CRC (the backup is used), a truncated image (partitions past the end are marked) or an MBR whose extended partition chain loops.
 
@@ -110,7 +120,7 @@ When nothing on the disk records a file any more (its directory entry is overwri
 
 A signature with no file behind it isn't listed, only counted. Once a file is found the search goes on after it, so a thumbnail inside a photo or a picture inside a DOCX isn't found again on its own. Files the FAT32 scan of the same area finds are left out, since `files` has them with their names. Carved files have no names: each is called by where it starts (`00003ff400.jpg` starts at byte 0x3ff400).
 
-Exports only ever create new files: a name that's taken gets ` (2)`, and names from the disk are made safe (no `..`, separators, `:` streams or device names like `CON`), so nothing read from an image can write outside the folder. When recovering from a real drive (later), the folder has to be on a different drive.
+Exports only ever create new files: a name that's taken gets ` (2)`, and names from the disk are made safe (no `..`, separators, `:` streams or device names like `CON`), so nothing read from an image can write outside the folder. When recovering from a drive, the folder has to be on a different one: the export refuses it otherwise.
 
 ## Building
 
@@ -146,7 +156,7 @@ CTest also runs `no_write_apis`, which fails if the engine or the CLI mentions a
 ```
 include/storage/   the engine's public headers
 src/core/          errors, results, hashes, the hex dump
-src/io/            block sources: image files, fault injection; read-only devices later
+src/io/            block sources: image files, fault injection
 src/partition/     MBR and GPT
 src/fs/            what the filesystem scanners share, and scan_volume(), which picks one
 src/fs/fat32/      the FAT32 scanner
@@ -155,6 +165,7 @@ src/fs/ntfs/       the NTFS scanner
 src/carving/       the signature scan and a validator per format
 src/export/        the exporter and the export report
 src/imaging/       the imager, its ddrescue map and images read through their maps. with the exporter, the only code that writes
+src/platform/      physical drives: listing them, reading one, which drive a path is on (windows; elsewhere not yet)
 src/session/       a recovery session: scans and exports on worker threads, read as snapshots
 src/cli/           fenrir-cli
 tests/             unit tests, cli tests and the write-API check
@@ -169,7 +180,7 @@ cmake/             fenrir's targets
 - Recovery never writes to the source. Image files are opened read-only, and on Windows nothing else can open them for writing while they're open.
 - Two places in the engine write, and `tests/check_no_write_apis.cmake` keeps it that way: the exporter (new files only) and the imager (a new image, or the one its map was made with, and the map itself). Neither ever writes over a file it didn't make.
 - What wasn't read is never taken for zeros: an image's map goes with it everywhere it's read.
-- Device paths (`\\.\PhysicalDrive0`, `\\?\Volume{...}`) are refused by the image reader. Reading drives directly gets its own reviewed source later.
+- Drives are read through their own source (`storage::DiskSource`), opened for reading only; the image reader refuses device paths. The only things ever sent to a drive are three queries that change nothing (its description, its size, which drives a volume is on), and `no_write_apis` fails on any other.
 - No erasure code exists until the simulator (P7). Real drives come last (P8), after an independent review.
 - No telemetry and no uploads.
 

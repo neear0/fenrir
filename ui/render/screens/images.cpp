@@ -81,6 +81,8 @@ namespace {
             app::human_size(st.unknown) + " not read yet";
     }
 
+    void drives();
+
     // making an image: a copy of a disk image into a new file with its map, on the imaging session's thread
     void make_image() {
         const storage::ImagingSnapshot& m = app::imaging_now();
@@ -139,8 +141,47 @@ namespace {
                 app::imaging().start(*app::imaging_source, *app::imaging_target);
         }
         widgets::text("Nothing is written over: the copy is a new file, or a stopped one with its map next to it, which goes on.");
-        widgets::text("Drives can't be picked yet, that's the next part of milestone P6. fenrir-cli image has the options.");
+        drives();
         render::groupbox::end();
+    }
+
+    // the drives, any of which can be the one to copy: picking one only reads it, and never anything onto it
+    void drives() {
+        static bool listed = false;
+        if (!listed) {
+            app::drives::refresh();
+            listed = true;
+        }
+        core::layout(ImVec2(0.f, core::font_size() * 0.5f));
+        const bool elevated = app::drives::elevated();
+        widgets::text(elevated ? "Or copy a drive. It's only read: the copy can't go onto the drive itself."
+            : "Or copy a drive: that needs administrator rights, for reading it. Nothing is ever written to it.");
+        const std::vector<storage::DiskInfo>& disks = app::drives::list();
+        if (disks.empty())
+            widgets::text(app::drives::listing() ? "Looking for drives..." : "No drives found.");
+        for (const storage::DiskInfo& d : disks) {
+            std::string label = "Drive " + std::to_string(d.number) + ":  " + (d.size ? app::human_size(d.size) : std::string("no medium")) + "  " + d.bus + "  " +
+                (d.vendor.empty() ? d.model : d.vendor + " " + d.model);
+            for (const std::string& v : d.volumes)
+                if (v.size() <= 3) // drive letters, not volume names
+                    label += "  " + v;
+            if (d.system)
+                label += "  (Windows is on it)";
+            label += "##drive" + std::to_string(d.number);
+            if (!elevated || d.size == 0) {
+                widgets::text(label.substr(0, label.find("##")).c_str());
+                continue;
+            }
+            if (widgets::button(label.c_str()))
+                app::imaging_source = d.path;
+        }
+        if (widgets::button(app::drives::listing() ? "Looking..." : "Look again"))
+            app::drives::refresh();
+        if (!elevated && !app::imaging().busy()) {
+            core::same_line(style::general::inner_spacing.x);
+            if (widgets::button("Restart as administrator") && app::drives::restart_elevated())
+                platform::close();
+        }
     }
 }
 

@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "storage/carving.h"
+#include "storage/disks.h"
 #include "storage/exporter.h"
 #include "storage/filesystem.h"
 #include "storage/file_image_source.h"
@@ -67,6 +68,12 @@ namespace {
 			"                                       goes on from there, as it does from a map ddrescue made. the other\n"
 			"                                       commands read an image together with its map\n"
 			"  map <file>                           what a map says was copied, and where the bad areas are\n"
+			"  drives                               the physical drives, their volumes, and which has Windows on it\n"
+			"\n"
+			"  any <image> can be a drive, \\\\.\\PhysicalDriveN (see drives), opened read-only: that needs\n"
+			"  administrator rights. nothing is ever written to a drive being read, image and recover refuse a\n"
+			"  destination on it.\n"
+			"  --size N                             read only the first N bytes of the image or drive\n"
 			"  --version                            print the version\n");
 	}
 
@@ -106,17 +113,22 @@ namespace {
 	}
 
 	// an image, read through its map when there's one next to it (what `image` makes)
+	// --size N: only the first N bytes of the source are read, by every command
+	std::optional<std::uint64_t> source_limit;
+
+	// an image, read through its map when there's one next to it (what `image` makes), or a drive (\.PhysicalDriveN)
 	struct t_image {
 		std::unique_ptr<storage::IBlockSource> source;
+		std::unique_ptr<storage::IBlockSource> limited; // the first --size bytes of source
 		std::shared_ptr<const storage::ImageMap> map;
 		std::filesystem::path mapfile;
 		explicit operator bool() const { return source != nullptr; }
-		storage::IBlockSource& operator*() const { return *source; }
-		storage::IBlockSource* operator->() const { return source.get(); }
+		storage::IBlockSource& operator*() const { return limited ? *limited : *source; }
+		storage::IBlockSource* operator->() const { return limited ? limited.get() : source.get(); }
 	};
 
 	t_image open(const std::filesystem::path& path) {
-		auto opened = storage::open_image(path);
+		auto opened = storage::open_source(path);
 		if (!opened) {
 			print_error(opened.error());
 			return {};
@@ -126,7 +138,19 @@ namespace {
 		if (const storage::ImageMap* map = opened->map.get(); map && map->bytes(storage::BlockStatus::finished) < map->size())
 			std::println(stderr, "note: read with its map {}: {} of its bytes weren't read when the disk was imaged, and aren't taken for data",
 				utf8(opened->mapfile.filename().u8string()), map->size() - map->bytes(storage::BlockStatus::finished));
-		return { std::move(opened->source), std::move(opened->map), std::move(opened->mapfile) };
+		t_image out{ std::move(opened->source), nullptr, std::move(opened->map), std::move(opened->mapfile) };
+		if (source_limit && *source_limit < out.source->size_bytes()) {
+			auto view = storage::PartitionView::open(*out.source, 0, *source_limit);
+			if (!view) {
+				print_error(view.error());
+				return {};
+			}
+			out.limited = std::move(*view);
+		}
+		if (out.source->physical_disk())
+			if (const auto* disk = dynamic_cast<const storage::DiskSource*>(out.source.get()))
+				std::println(stderr, "note: reading drive {} ({}{}{}), read-only", disk->info().number, disk->info().model, disk->info().serial.empty() ? "" : ", serial ", disk->info().serial);
+		return out;
 	}
 
 	int info(const std::filesystem::path& path) {
@@ -141,8 +165,14 @@ namespace {
 			std::println("sectors: {} x 512 bytes", size / 512);
 		else
 			std::println("sectors: not a whole number of 512 byte sectors ({} bytes left over)", size % 512);
+		if (const auto* disk = dynamic_cast<const storage::DiskSource*>(image.source.get())) {
+			const storage::DiskInfo& d = disk->info();
+			std::println("drive:   {}, {}{}, serial {}", d.vendor.empty() ? d.model : d.vendor + " " + d.model, d.bus, d.removable ? ", removable" : "", d.serial.empty() ? "(none given)" : d.serial);
+			std::println("access:  read-only, the drive is read as it is while windows keeps using it");
+		}
 #ifdef _WIN32
-		std::println("access:  read-only, other programs can't open it for writing while it's open");
+		else
+			std::println("access:  read-only, other programs can't open it for writing while it's open");
 #else
 		std::println("access:  read-only");
 #endif
@@ -275,22 +305,31 @@ namespace {
 	};
 
 	int hash(const std::filesystem::path& path) {
-		auto image = storage::FileImageSource::open(path); // the file as it is, map or not
-		if (!image) {
-			print_error(image.error());
+		// an image file as it is, map or not; a drive (or its first --size bytes) as it reads
+		std::unique_ptr<storage::IBlockSource> file;
+		t_image drive;
+		if (storage::physical_drive_number(path)) {
+			drive = open(path);
+			if (!drive)
+				return 1;
+		} else if (auto opened = storage::FileImageSource::open(path)) {
+			file = std::move(*opened);
+		} else {
+			print_error(opened.error());
 			return 1;
 		}
+		storage::IBlockSource* image = file ? file.get() : &*drive;
 		storage::Result<storage::Sha256::Digest> digest;
 		{
 			t_percent percent("hashing");
-			digest = storage::sha256_source(**image, nullptr, percent.sink());
+			digest = storage::sha256_source(*image, nullptr, percent.sink());
 		}
 		if (!digest) {
 			print_error(digest.error());
 			return 1;
 		}
 		std::println("image:   {}", utf8(path.u8string()));
-		std::println("size:    {} bytes", (*image)->size_bytes());
+		std::println("size:    {} bytes", image->size_bytes());
 		std::println("sha256:  {}", storage::to_hex(*digest));
 		return 0;
 	}
@@ -650,6 +689,11 @@ namespace {
 		auto source = open(source_path);
 		if (!source)
 			return 1;
+		storage::ImagingOptions imaging = options.imaging;
+		if (imaging.sector_size == 0) {
+			const auto* disk = dynamic_cast<const storage::DiskSource*>(source.source.get());
+			imaging.sector_size = disk ? disk->info().sector_size : 512;
+		}
 		const std::filesystem::path mapfile = options.mapfile.value_or(storage::default_map_path(destination));
 		std::println("source:      {}, {} bytes ({})", utf8(source_path.u8string()), source->size_bytes(), human_size(source->size_bytes()));
 		std::println("image:       {}", utf8(destination.u8string()));
@@ -665,7 +709,7 @@ namespace {
 		storage::Result<storage::ImagingStatus> status;
 		{
 			t_imaging_progress progress;
-			status = storage::acquire_image(*source, destination, mapfile, options.imaging, &cancel, &progress);
+			status = storage::acquire_image(*source, destination, mapfile, imaging, &cancel, &progress);
 		}
 #ifdef _WIN32
 		SetConsoleCtrlHandler(on_interrupt, FALSE);
@@ -697,6 +741,31 @@ namespace {
 			std::println("done, all of it copied");
 		else
 			std::println("done. what wasn't copied is zeros in the image, and only its map says so: keep the map next to it, fenrir reads the two together");
+		return 0;
+	}
+
+	int drives() {
+		auto disks = storage::list_disks();
+		if (!disks) {
+			print_error(disks.error());
+			return 1;
+		}
+		std::println("  drive  size          bus        model");
+		for (const storage::DiskInfo& d : *disks) {
+			std::string model = d.vendor.empty() ? d.model : d.vendor + " " + d.model;
+			if (d.removable)
+				model += ", removable";
+			if (d.system)
+				model += ", has Windows on it";
+			std::println("  {:>5}  {:<12}  {:<9}  {}", d.number, d.size ? human_size(d.size) : "-", d.bus, model);
+			std::println("         {}{}", utf8(d.path.u8string()), d.serial.empty() ? "" : ", serial " + d.serial);
+			for (const std::string& v : d.volumes)
+				std::println("         volume {}", v);
+			if (!d.error.empty())
+				std::println("         {}", d.error);
+		}
+		std::println("");
+		std::println("listed without administrator rights. reading one (image, info, partitions...) needs them, and only ever reads");
 		return 0;
 	}
 
@@ -734,6 +803,7 @@ namespace {
 		bool all = false, why = false, carved = false, every_byte = false, bad = false;
 		std::optional<std::filesystem::path> map;
 		std::optional<std::uint64_t> cluster_size, retries, max_errors;
+		std::optional<std::uint64_t> size;
 		bool no_trim = false, no_scrape = false;
 	};
 
@@ -741,7 +811,7 @@ namespace {
 		t_args out;
 		for (std::size_t i = 1; i < args.size(); i++) {
 			const std::filesystem::path& a = args[i];
-			if (a == "--partition" || a == "--sector-size" || a == "--id" || a == "--cluster-size" || a == "--retries" || a == "--max-errors") {
+			if (a == "--partition" || a == "--sector-size" || a == "--id" || a == "--cluster-size" || a == "--retries" || a == "--max-errors" || a == "--size") {
 				const std::optional<std::uint64_t> v = i + 1 < args.size() ? number(args[++i]) : std::nullopt;
 				if (!v)
 					out.bad = true;
@@ -755,6 +825,8 @@ namespace {
 					out.retries = v;
 				else if (a == "--max-errors")
 					out.max_errors = v;
+				else if (a == "--size")
+					out.size = v;
 				else
 					out.ids.push_back(*v);
 			} else if (a == "--map") {
@@ -803,6 +875,9 @@ namespace {
 			usage();
 			return 2;
 		}
+		source_limit = a.size;
+		if (command == "drives" && n == 0)
+			return drives();
 		if (command == "info" && n == 1)
 			return info(a.positional[0]);
 		if (command == "hash" && n == 1)
@@ -826,7 +901,7 @@ namespace {
 		if (command == "image" && n == 2 && a.sector_size.value_or(0) <= 65536 && a.cluster_size.value_or(0) <= (64u << 20) && a.retries.value_or(0) <= 1000) {
 			t_image_options o;
 			o.mapfile = a.map;
-			o.imaging.sector_size = static_cast<std::uint32_t>(a.sector_size.value_or(512));
+			o.imaging.sector_size = static_cast<std::uint32_t>(a.sector_size.value_or(0)); // 0: the drive's own, 512 for an image
 			o.imaging.cluster_size = static_cast<std::uint32_t>(a.cluster_size.value_or(65536));
 			o.imaging.retries = static_cast<unsigned>(a.retries.value_or(0));
 			o.imaging.max_read_errors = a.max_errors.value_or(0);

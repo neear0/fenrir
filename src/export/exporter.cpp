@@ -6,6 +6,7 @@
 #include <memory>
 #include <new>
 
+#include "storage/disks.h"
 #include "storage/exporter.h"
 #include "storage/file_image_source.h"
 
@@ -84,6 +85,9 @@ namespace {
 			return fail(Errc::invalid_argument, "exporting: no destination");
 		if (is_device_path(destination))
 			return fail(Errc::unsupported, "exporting: the destination is a device, not a directory");
+		if (const std::optional<std::uint32_t> disk = volume.physical_disk()) // never onto the drive being recovered
+			if (Result<void> elsewhere = check_destination(destination, *disk); !elsewhere)
+				return std::unexpected(elsewhere.error());
 		if (candidate.integrity == Integrity::unrecoverable && !candidate.directory)
 			return fail(Errc::unsupported, "exporting: nothing of it is recoverable");
 

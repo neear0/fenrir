@@ -1,6 +1,9 @@
 #include "../../ui.h"
 #include "app.h"
 
+#include <mutex>
+#include <thread>
+
 namespace {
 	enum e_dialog_key { image_to_scan = 1, image_to_copy, copy_target };
 
@@ -129,4 +132,41 @@ std::string fenrir::app::fit(const std::string& text, float width) {
 		out = "..." + text.substr(from);
 	} while (from < text.size() && celosia::render::text::size(out.c_str()).x > width);
 	return out;
+}
+
+namespace {
+	struct t_drives {
+		std::mutex mutex;
+		std::vector<storage::DiskInfo> list;
+		bool listing = false;
+	};
+	std::shared_ptr<t_drives> drive_state = std::make_shared<t_drives>();
+	std::vector<storage::DiskInfo> drives_shown; // the render thread's copy
+}
+
+void fenrir::app::drives::refresh() {
+	{
+		std::lock_guard lock(drive_state->mutex);
+		if (drive_state->listing)
+			return;
+		drive_state->listing = true;
+	}
+	std::thread([state = drive_state] {
+		auto listed = storage::list_disks();
+		std::lock_guard lock(state->mutex);
+		state->list = listed ? std::move(*listed) : std::vector<storage::DiskInfo>{};
+		state->listing = false;
+	}).detach(); // the state is shared with it, nothing it touches goes away before it's done
+}
+
+bool fenrir::app::drives::listing() {
+	std::lock_guard lock(drive_state->mutex);
+	return drive_state->listing;
+}
+
+const std::vector<storage::DiskInfo>& fenrir::app::drives::list() {
+	std::lock_guard lock(drive_state->mutex);
+	if (!drive_state->listing)
+		drives_shown = drive_state->list;
+	return drives_shown;
 }

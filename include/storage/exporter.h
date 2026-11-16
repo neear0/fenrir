@@ -9,11 +9,12 @@
 #include "jobs.h"
 #include "recovery_candidate.h"
 
-// the one place the engine writes: recovered files, as new files in a destination directory the user picked. it only
-// reads the source (through IBlockSource, which can't write) and only ever creates files, it never opens one that's
-// already there, so neither the image nor anything else in the destination can be overwritten.
-// the destination still has to be on a different drive than a *device* being recovered from, or the export could land
-// on the free space it's recovering. there are no device sources yet: when one comes, it has to check that first
+// where the engine writes recovered files, as new files in a destination directory the user picked (imaging, in
+// src/imaging/, is the only other place the engine writes). it only reads the source (through IBlockSource, which
+// can't write) and only ever creates files, it never opens one that's already there, so neither the image nor anything
+// else in the destination can be overwritten.
+// when the source is a drive (IBlockSource::physical_disk()), the destination has to be on another one, or the export
+// could land on the free space it's recovering: export_candidate() refuses it otherwise (check_destination())
 namespace storage {
 	struct ExportedFile {
 		std::filesystem::path path; // what was written

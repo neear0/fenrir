@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "storage/disks.h"
 #include "storage/imaging_session.h"
 #include "storage/session.h"
 
@@ -27,6 +29,15 @@ namespace fenrir::app {
 	inline std::optional<std::filesystem::path> imaging_source, imaging_target; // picked for the next copy
 	void pick_imaging_source();
 	void pick_imaging_target();
+
+	// drives to image: listed on a thread of their own, a drive that's asleep can take a moment to answer
+	namespace drives {
+		void refresh();                                // lists them again, unless it's already doing that
+		bool listing();
+		const std::vector<storage::DiskInfo>& list(); // the last list, empty until the first one is done
+		bool elevated();                               // reading a drive needs administrator rights
+		bool restart_elevated();                       // asks windows (its prompt) to start fenrir again as administrator: true when it did
+	}
 
 	// native file dialogs, each on a thread of its own so the window keeps drawing while one is open. the window is
 	// disabled under it, like under any modal dialog. take() hands what was picked over once, to whoever asked

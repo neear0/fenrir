@@ -20,6 +20,7 @@ add_executable(storage_tests
     unit/test_carving.cpp
     unit/test_session.cpp
     unit/test_imaging.cpp
+    unit/test_disks.cpp
 )
 target_include_directories(storage_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_include_directories(storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools) # make_fixtures/fixtures.h
@@ -124,3 +125,8 @@ add_test(NAME cli_image
     COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:storage_cli> -DIMAGE=${images}/fat32.img -DOUT=${CMAKE_CURRENT_BINARY_DIR}/imaged
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_image.cmake)
 set_tests_properties(cli_image PROPERTIES FIXTURES_REQUIRED disk_images)
+
+# drives: listed without administrator rights. reading one is tried by hand, on a disposable one (see the README)
+if(WIN32)
+    cli_test(drives "drives" "drive +size +bus +model\n.*PhysicalDrive[0-9]")
+endif()

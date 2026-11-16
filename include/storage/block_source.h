@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include "result.h"
@@ -23,6 +24,10 @@ namespace storage {
 		// (a device reading in chunks, FaultInjectingSource), but it's never 0 before the end: 0 means offset ==
 		// size_bytes() or an empty output. an offset past the end is out_of_range
 		virtual Result<std::size_t> read_at(std::uint64_t offset, std::span<std::byte> output) noexcept = 0;
+
+		// the physical drive it reads from, when it's a drive (or a part of one) rather than an image file or memory.
+		// whatever writes while reading it has to stay off that drive: storage::check_destination()
+		virtual std::optional<std::uint32_t> physical_disk() const noexcept { return std::nullopt; }
 	};
 
 	// read_at() until exactly output.size() bytes are read, out_of_range when the source ends before that

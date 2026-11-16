@@ -48,6 +48,10 @@ namespace storage {
 	// image this size, is left out and said so in note: the image is read whole then, as any other image is
 	Result<OpenedImage> open_image(const std::filesystem::path& image) noexcept;
 
+	// a path from the user: \\.\PhysicalDriveN opens that drive read-only (DiskSource, administrator rights needed),
+	// anything else is open_image()
+	Result<OpenedImage> open_source(const std::filesystem::path& path) noexcept;
+
 	// a found file whose data runs into what map doesn't count as copied: cut at the first byte that wasn't, partial
 	// (unrecoverable when it's none of it), with a reason saying so. volume_offset is where the file's volume starts in
 	// the image. false when it's all there

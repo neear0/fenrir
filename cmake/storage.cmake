@@ -34,6 +34,7 @@ add_library(storage_core STATIC
     include/storage/imaging.h
     include/storage/mapped_image.h
     include/storage/imaging_session.h
+    include/storage/disks.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -62,9 +63,9 @@ add_library(storage_core STATIC
     src/imaging/mapped_image.cpp
 )
 if(WIN32)
-    target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp src/imaging/image_file_win32.cpp)
+    target_sources(storage_core PRIVATE src/io/file_image_source_win32.cpp src/imaging/image_file_win32.cpp src/platform/windows/disks.cpp)
 else()
-    target_sources(storage_core PRIVATE src/io/file_image_source_posix.cpp src/imaging/image_file_posix.cpp)
+    target_sources(storage_core PRIVATE src/io/file_image_source_posix.cpp src/imaging/image_file_posix.cpp src/platform/posix/disks.cpp)
     target_compile_definitions(storage_core PUBLIC _FILE_OFFSET_BITS=64)
 endif()
 target_include_directories(storage_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

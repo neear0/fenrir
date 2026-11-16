@@ -12,6 +12,7 @@
 
 #include "image_file.h"
 #include "storage/bytes.h"
+#include "storage/disks.h"
 #include "storage/file_image_source.h"
 #include "storage/imaging.h"
 
@@ -269,6 +270,10 @@ namespace {
 			return std::unexpected(checked.error());
 		if (source.size_bytes() == 0)
 			return fail(Errc::invalid_argument, "imaging: the source is empty");
+		if (const std::optional<std::uint32_t> disk = source.physical_disk()) // never onto the drive being imaged
+			for (const fs::path& written : { image, mapfile })
+				if (Result<void> elsewhere = check_destination(written, *disk); !elsewhere)
+					return std::unexpected(elsewhere.error());
 		if (image.empty() || mapfile.empty() || is_device_path(image) || is_device_path(mapfile))
 			return fail(Errc::unsupported, "imaging: the image and its map have to be files");
 		const fs::path pending = imaging::pending_path(mapfile);

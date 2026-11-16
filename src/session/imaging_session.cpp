@@ -1,11 +1,13 @@
 // the imaging session's thread: acquire_image() with an observer that publishes snapshots, a few times a second and
 // whenever the map is saved. the ui only ever copies a published snapshot
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <mutex>
 #include <thread>
 
+#include "storage/disks.h"
 #include "storage/imaging_session.h"
 #include "storage/mapped_image.h"
 
@@ -65,10 +67,14 @@ struct storage::ImagingSession::t_impl {
 		const ImagingOptions& options, CancellationToken& token) {
 		t_observer observer(*this);
 		Result<ImagingStatus> result = fail(Errc::io_error, "imaging");
-		if (Result<OpenedImage> source = open_image(source_path); !source)
+		if (Result<OpenedImage> source = open_source(source_path); !source)
 			result = std::unexpected(source.error());
-		else
-			result = acquire_image(*source->source, image, mapfile, options, &token, &observer);
+		else {
+			ImagingOptions o = options;
+			if (const auto* disk = dynamic_cast<const DiskSource*>(source->source.get())) // its own sectors, not parts of them
+				o.sector_size = std::max(o.sector_size, disk->info().sector_size);
+			result = acquire_image(*source->source, image, mapfile, o, &token, &observer);
+		}
 		// the final map, for the bar: what the copy ended with, saved
 		Result<ImageMap> map = load_map(mapfile);
 		const double seconds = std::chrono::duration<double>(clock_type::now() - observer.started).count();
