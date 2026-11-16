@@ -24,23 +24,155 @@ namespace {
             render::text::draw_aligned(core::drawlist(), clip.Min, clip.Max, ImVec2(0.f, 0.f), color, cells[i].c_str(), nullptr, nullptr, &clip);
         }
     }
+
+    ImColor copied_color(float share) { ImVec4 a = style::general::accent.Value; a.w = 0.25f + 0.6f * share; return ImColor(a); }
+    ImColor bad_color() { return ImColor(232, 72, 85, 220); }
+
+    // a map as a bar, start of the disk on the left: copied, bad (any bad sector in a slice shows), not read yet
+    void map_bar(const std::vector<storage::MapCell>& cells) {
+        const ImVec2 pos = core::cursor();
+        const ImRect bb(pos, pos + ImVec2(core::available().x, px(20.f)));
+        core::layout(bb.GetSize(), 0.f);
+        if (!core::add(bb, 0))
+            return;
+        ImDrawList* drawlist = core::drawlist();
+        drawlist->AddRectFilled(bb.Min, bb.Max, dim(0.07f), px(4.f));
+        const float width = bb.GetWidth() / (float)(cells.empty() ? 1 : cells.size());
+        for (std::size_t i = 0; i < cells.size(); i++) {
+            const storage::MapCell& c = cells[i];
+            if (c.finished <= 0.f && c.bad <= 0.f)
+                continue;
+            const ImVec2 a(bb.Min.x + width * (float)i, bb.Min.y), b(bb.Min.x + width * (float)(i + 1), bb.Max.y);
+            drawlist->AddRectFilled(a, b, c.bad > 0.f ? bad_color() : copied_color(c.finished));
+        }
+
+        // the legend under it
+        const ImVec2 at = core::cursor();
+        const float line = core::font_size() + px(6.f), box = core::font_size() * 0.6f;
+        const ImRect legend(at, at + ImVec2(core::available().x, line));
+        core::layout(legend.GetSize(), 0.f);
+        if (!core::add(legend, 0))
+            return;
+        float x = legend.Min.x;
+        const std::pair<ImColor, const char*> items[] = { { copied_color(1.f), "copied" }, { bad_color(), "bad" }, { dim(0.15f), "not read yet" } };
+        for (const auto& [color, label] : items) {
+            const float y = legend.Min.y + (line - box) * 0.5f;
+            drawlist->AddRectFilled(ImVec2(x, y), ImVec2(x + box, y + box), color, px(2.f));
+            x += box + px(6.f);
+            render::text::draw_aligned(drawlist, ImVec2(x, legend.Min.y), ImVec2(legend.Max.x, legend.Max.y), ImVec2(0.f, 0.5f), dim(0.8f), label);
+            x += render::text::size(label).x + px(18.f);
+        }
+    }
+
+    std::string phase_text(storage::ImagingPhase phase) {
+        switch (phase) {
+        case storage::ImagingPhase::copying: return "copying";
+        case storage::ImagingPhase::trimming: return "trimming around what failed";
+        case storage::ImagingPhase::scraping: return "reading what failed sector by sector";
+        case storage::ImagingPhase::retrying: return "retrying the bad sectors";
+        case storage::ImagingPhase::finished: return "finished";
+        }
+        return "";
+    }
+
+    std::string amounts(const storage::ImagingStatus& st) {
+        const std::uint64_t percent = st.size ? st.finished * 100 / st.size : 0;
+        return std::to_string(percent) + "% copied (" + app::human_size(st.finished) + " of " + app::human_size(st.size) + "), " + app::human_size(st.bad) + " bad, " +
+            app::human_size(st.unknown) + " not read yet";
+    }
+
+    // making an image: a copy of a disk image into a new file with its map, on the imaging session's thread
+    void make_image() {
+        const storage::ImagingSnapshot& m = app::imaging_now();
+        render::groupbox::begin("Make an image", "A copy of a disk that reads what it can and keeps a map of what it couldn't");
+        if (!app::dialogs::available()) {
+            widgets::text("This build has no file dialog yet (the GLFW one): use fenrir-cli image.");
+            render::groupbox::end();
+            return;
+        }
+
+        if (m.running) {
+            const std::string what = phase_text(m.status.phase) + (m.status.phase == storage::ImagingPhase::finished ? "" : ", pass " + std::to_string(m.status.pass)) +
+                ":  " + amounts(m.status);
+            widgets::text(app::fit(what, core::available().x).c_str());
+            const std::string more = app::thousands(m.status.read_errors) + " read errors so far,  " + app::duration(m.seconds) + "  ->  " + app::utf8(m.image.filename());
+            widgets::text(more.c_str());
+            map_bar(m.bar);
+            if (widgets::button("Stop"))
+                app::imaging().cancel();
+            render::groupbox::end();
+            return;
+        }
+
+        if (m.version != 0 && !m.image.empty()) { // how the last one went
+            std::string how;
+            if (m.done)
+                how = m.status.bad == 0 && m.status.unknown == 0 ? "Done, all of it copied" : "Done: " + amounts(m.status);
+            else if (m.error && m.error->code == storage::Errc::cancelled)
+                how = "Stopped: " + amounts(m.status) + ". It goes on from its map";
+            else if (m.error)
+                how = std::string("It couldn't copy: ") + m.error->context + ": " + std::string(storage::to_string(m.error->code));
+            widgets::text(app::fit(how, core::available().x).c_str());
+            if (!m.bar.empty())
+                map_bar(m.bar);
+            const std::string files = app::fit(app::utf8(m.image) + "  with its map  " + app::utf8(m.mapfile.filename()), core::available().x);
+            widgets::text(files.c_str());
+            if (!m.done && m.error && m.error->code == storage::Errc::cancelled && widgets::button("Go on"))
+                app::imaging().start(m.source, m.image);
+            if ((m.done || m.status.finished != 0) && !app::session().busy() && widgets::button("Look for files in the copy"))
+                app::session().scan(m.image, { .carve = app::deep_scan });
+            core::layout(ImVec2(0.f, core::font_size() * 0.5f));
+        }
+
+        const std::string source = app::imaging_source ? "Copy: " + app::utf8(*app::imaging_source) : "Copy: (pick a disk image)";
+        const std::string target = app::imaging_target ? "Into: " + app::utf8(*app::imaging_target) : "Into: (pick where the copy goes)";
+        widgets::text(app::fit(source, core::available().x).c_str());
+        widgets::text(app::fit(target, core::available().x).c_str());
+        if (widgets::button("Disk image to copy..."))
+            app::pick_imaging_source();
+        core::same_line(style::general::inner_spacing.x);
+        if (widgets::button("Where the copy goes..."))
+            app::pick_imaging_target();
+        if (app::imaging_source && app::imaging_target) {
+            core::same_line(style::general::inner_spacing.x);
+            if (widgets::button("Start copying"))
+                app::imaging().start(*app::imaging_source, *app::imaging_target);
+        }
+        widgets::text("Nothing is written over: the copy is a new file, or a stopped one with its map next to it, which goes on.");
+        widgets::text("Drives can't be picked yet, that's the next part of milestone P6. fenrir-cli image has the options.");
+        render::groupbox::end();
+    }
 }
 
 void fenrir::screens::images() {
+    make_image();
+
     const storage::SessionSnapshot& s = app::now();
     const bool busy = s.phase != storage::SessionPhase::idle;
     const std::string description = s.open ? app::utf8(s.image) : "Raw images (.img, .dd, .bin), opened read-only";
-    render::groupbox::begin("Disk image", description.c_str(),
-        render::groupbox::e_group_layout::fullscreen);
+    render::groupbox::begin("Disk image", description.c_str());
     if (!s.open) {
         widgets::text(busy ? "Opening it..." : s.error ? s.status.c_str() : "No image is open.");
         if (!busy && app::dialogs::available() && widgets::button("Open an image..."))
             app::open_image();
         core::layout(ImVec2(0.f, core::font_size() * 0.5f));
         widgets::text("Images are opened read-only, and on Windows nothing else can write to them while they're open.");
-        widgets::text("Drives and volumes aren't opened as images. Imaging a drive is milestone P6.");
+        widgets::text("An image with a map next to it (one made above, or by ddrescue) is read through it: what wasn't copied isn't taken for data.");
         render::groupbox::end();
         return;
+    }
+
+    if (s.map) { // the map it's read through
+        static std::uint64_t drawn_version = UINT64_MAX;
+        static std::vector<storage::MapCell> cells;
+        if (drawn_version != s.version) {
+            cells = storage::summarize(*s.map, storage::ImagingSession::bar_cells);
+            drawn_version = s.version;
+        }
+        const std::string line = "Read through its map " + app::utf8(s.mapfile.filename()) + ": " + app::human_size(s.map->bytes(storage::BlockStatus::finished)) +
+            " copied, " + app::human_size(s.map->bytes(storage::BlockStatus::bad)) + " bad, " + app::human_size(s.map->unknown_bytes()) + " not read";
+        widgets::text(app::fit(line, core::available().x).c_str());
+        map_bar(cells);
     }
 
     const storage::PartitionMap& map = s.partitions;

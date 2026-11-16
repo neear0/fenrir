@@ -2,15 +2,27 @@
 #include "app.h"
 
 namespace {
-	enum e_dialog_key { image_to_scan = 1 };
+	enum e_dialog_key { image_to_scan = 1, image_to_copy, copy_target };
 
 	std::shared_ptr<const storage::SessionSnapshot> current;
+	std::shared_ptr<const storage::ImagingSnapshot> imaging_current;
 	int taken_at = -1;
 }
 
 storage::RecoverySession& fenrir::app::session() {
 	static storage::RecoverySession session; // its destructor stops the threads and waits for them, after main returns
 	return session;
+}
+
+storage::ImagingSession& fenrir::app::imaging() {
+	static storage::ImagingSession imaging; // its destructor stops the copy, with its map saved, after main returns
+	return imaging;
+}
+
+const storage::ImagingSnapshot& fenrir::app::imaging_now() {
+	if (!imaging_current)
+		imaging_current = imaging().snapshot();
+	return *imaging_current;
 }
 
 const storage::SessionSnapshot& fenrir::app::now() {
@@ -22,15 +34,30 @@ const storage::SessionSnapshot& fenrir::app::now() {
 void fenrir::app::frame() {
 	if (taken_at != celosia::core::frame()) {
 		current = session().snapshot();
+		imaging_current = imaging().snapshot();
 		taken_at = celosia::core::frame();
 	}
 	if (const auto image = dialogs::take(image_to_scan))
 		session().scan(*image, { .carve = deep_scan });
+	if (auto source = dialogs::take(image_to_copy))
+		imaging_source = std::move(source);
+	if (auto target = dialogs::take(copy_target))
+		imaging_target = std::move(target);
 }
 
 void fenrir::app::open_image() {
 	if (!session().busy())
 		dialogs::show(dialogs::e_kind::image, image_to_scan);
+}
+
+void fenrir::app::pick_imaging_source() {
+	if (!imaging().busy())
+		dialogs::show(dialogs::e_kind::image, image_to_copy);
+}
+
+void fenrir::app::pick_imaging_target() {
+	if (!imaging().busy())
+		dialogs::show(dialogs::e_kind::new_image, copy_target);
 }
 
 std::string fenrir::app::utf8(const std::filesystem::path& path) {

@@ -18,6 +18,7 @@
 #include "storage/filesystem.h"
 #include "storage/hash.h"
 #include "storage/imaging.h"
+#include "storage/imaging_session.h"
 #include "storage/mapped_image.h"
 #include "storage/memory_source.h"
 #include "storage/partition.h"
@@ -674,4 +675,64 @@ TEST_CASE("an imaged disk with a bad area: a scan of it cuts the file that was t
 		CHECK_FALSE(plain->map);
 		CHECK(plain->note.find("couldn't be read as its map") != std::string::npos);
 	}
+}
+
+TEST_CASE("a map summarized for a bar") {
+	ImageMap map(1000);
+	map.set(0, 500, BlockStatus::finished);
+	map.set(500, 50, BlockStatus::bad);
+	map.set(750, 250, BlockStatus::finished);
+	const auto bar = storage::summarize(map, 4);
+	REQUIRE(bar.size() == 4);
+	CHECK(bar[0].finished == doctest::Approx(1.0));
+	CHECK(bar[1].finished == doctest::Approx(1.0));
+	CHECK(bar[2].bad == doctest::Approx(0.2));
+	CHECK(bar[2].finished == doctest::Approx(0.0));
+	CHECK(bar[3].finished == doctest::Approx(1.0));
+	CHECK(storage::summarize(ImageMap(3), 10).size() == 3);
+	CHECK(storage::summarize(ImageMap(), 10).empty());
+
+	// cells that don't divide the size evenly still add up
+	ImageMap odd(1003);
+	odd.set(0, 1003, BlockStatus::finished);
+	double total = 0;
+	for (const storage::MapCell& c : storage::summarize(odd, 7))
+		total += c.finished;
+	CHECK(total == doctest::Approx(7.0));
+}
+
+TEST_CASE("an imaging session copies on its own thread, can be stopped, and goes on") {
+	t_temp_dir dir;
+	const auto bytes = pattern(3 << 20);
+	write_file(dir.path / "source.img", bytes);
+
+	storage::ImagingSession session;
+	REQUIRE(session.start(dir.path / "source.img", dir.path / "copy.img"));
+	session.cancel(); // most likely before it's done, but either way it has to end cleanly
+	session.wait();
+	auto s = session.snapshot();
+	CHECK_FALSE(s->running);
+	CHECK(s->mapfile == dir.path / "copy.map");
+	if (!s->done) {
+		REQUIRE(s->error);
+		CHECK(s->error->code == Errc::cancelled);
+	}
+
+	REQUIRE(session.start(dir.path / "source.img", dir.path / "copy.img"));
+	CHECK_FALSE(session.start(dir.path / "source.img", dir.path / "other.img")); // one at a time
+	session.wait();
+	s = session.snapshot();
+	CHECK(s->done);
+	CHECK_FALSE(s->error);
+	CHECK(s->status.finished == bytes.size());
+	REQUIRE(s->bar.size() == storage::ImagingSession::bar_cells);
+	CHECK(s->bar.front().finished == doctest::Approx(1.0));
+	CHECK(read_file(dir.path / "copy.img") == bytes);
+
+	REQUIRE(session.start(dir.path / "missing.img", dir.path / "copy2.img"));
+	session.wait();
+	s = session.snapshot();
+	REQUIRE(s->error);
+	CHECK(s->error->code == Errc::not_found);
+	CHECK_FALSE(fs::exists(dir.path / "copy2.img"));
 }

@@ -33,6 +33,7 @@ add_library(storage_core STATIC
     include/storage/session.h
     include/storage/imaging.h
     include/storage/mapped_image.h
+    include/storage/imaging_session.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -54,6 +55,7 @@ add_library(storage_core STATIC
     src/carving/pdf.cpp
     src/carving/zip.cpp
     src/session/session.cpp
+    src/session/imaging_session.cpp
     src/imaging/image_file.h
     src/imaging/map.cpp
     src/imaging/acquire.cpp

@@ -247,3 +247,30 @@ storage::Result<storage::ImageMap> storage::ImageMap::parse(std::string_view tex
 		return fail(Errc::out_of_memory, "reading a mapfile");
 	}
 }
+
+std::vector<storage::MapCell> storage::summarize(const ImageMap& map, std::size_t cells) {
+	const std::uint64_t size = map.size();
+	cells = static_cast<std::size_t>(std::min<std::uint64_t>(cells, size));
+	std::vector<MapCell> out(cells);
+	if (cells == 0)
+		return out;
+	// cell i is [i * size / cells, (i + 1) * size / cells), in 128-bit-free arithmetic: size / cells and the remainder
+	const std::uint64_t base = size / cells, extra = size % cells;
+	auto cell_start = [&](std::size_t i) { return i * base + std::min<std::uint64_t>(i, extra); };
+	std::size_t cell = 0;
+	for (const MapBlock& block : map.blocks()) {
+		if (block.status != BlockStatus::finished && block.status != BlockStatus::bad)
+			continue;
+		std::uint64_t pos = block.pos;
+		while (cell + 1 < cells && cell_start(cell + 1) <= pos)
+			cell++;
+		for (std::size_t c = cell; c < cells && pos < block.end(); c++) {
+			const std::uint64_t end = c + 1 < cells ? cell_start(c + 1) : size;
+			const std::uint64_t part = std::min(end, block.end()) - pos;
+			const float share = static_cast<float>(static_cast<double>(part) / static_cast<double>(end - cell_start(c)));
+			(block.status == BlockStatus::finished ? out[c].finished : out[c].bad) += share;
+			pos += part;
+		}
+	}
+	return out;
+}

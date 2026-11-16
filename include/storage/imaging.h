@@ -140,4 +140,11 @@ namespace storage {
 
 	// mapfile read and parsed, for showing a copy's state
 	Result<ImageMap> load_map(const std::filesystem::path& mapfile) noexcept;
+
+	// a slice of a map for drawing it as a bar: how much of it is copied and how much bad, the rest isn't read yet
+	struct MapCell {
+		float finished = 0.f, bad = 0.f; // fractions of the slice
+	};
+	// the map in cells equal slices (fewer when it's smaller than that)
+	std::vector<MapCell> summarize(const ImageMap& map, std::size_t cells);
 }

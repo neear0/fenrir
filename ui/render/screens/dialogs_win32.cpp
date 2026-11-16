@@ -28,13 +28,22 @@ namespace {
 
 	std::optional<std::filesystem::path> run(fenrir::app::dialogs::e_kind kind, HWND parent) {
 		std::optional<std::filesystem::path> result;
-		IFileOpenDialog* dialog = nullptr;
-		if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+		IFileDialog* dialog = nullptr;
+		const bool save = kind == fenrir::app::dialogs::e_kind::new_image;
+		if (FAILED(CoCreateInstance(save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
 			return result;
 		FILEOPENDIALOGOPTIONS options = 0;
 		dialog->GetOptions(&options);
 		options |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR;
-		if (kind == fenrir::app::dialogs::e_kind::folder) {
+		if (save) {
+			// no "replace it?": nothing is ever written over. a name that's taken is either a stopped copy with its map
+			// next to it, which goes on, or it's refused
+			options &= ~FOS_OVERWRITEPROMPT;
+			const COMDLG_FILTERSPEC types[] = { { L"Disk images (*.img)", L"*.img" }, { L"All files", L"*.*" } };
+			dialog->SetFileTypes(ARRAYSIZE(types), types);
+			dialog->SetDefaultExtension(L"img");
+			dialog->SetTitle(L"Where the copy goes: a new file, or a stopped copy to go on with");
+		} else if (kind == fenrir::app::dialogs::e_kind::folder) {
 			options |= FOS_PICKFOLDERS;
 			dialog->SetTitle(L"Where recovered files go: a folder on a different drive than the one being recovered");
 		} else {
@@ -44,7 +53,7 @@ namespace {
 				{ L"All files", L"*.*" },
 			};
 			dialog->SetFileTypes(ARRAYSIZE(types), types);
-			dialog->SetTitle(L"A disk image to scan, opened read-only");
+			dialog->SetTitle(L"A disk image, opened read-only");
 		}
 		dialog->SetOptions(options);
 		if (SUCCEEDED(dialog->Show(parent))) {

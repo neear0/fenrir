@@ -4,13 +4,14 @@
 #include <optional>
 #include <string>
 
+#include "storage/imaging_session.h"
 #include "storage/session.h"
 
 // what fenrir's pages share: the recovery session (the engine, working on threads of its own) and the snapshot of it
 // this frame draws. pages only read snapshots and ask the session to start or stop things, which returns at once: no
 // page ever reads the image or writes a file on the render thread
 namespace fenrir::app {
-	inline constexpr const char* build_stage = "P5"; // the milestone this build is at, in the titlebar
+	inline constexpr const char* build_stage = "P6"; // the milestone this build is at, in the titlebar
 
 	storage::RecoverySession& session();
 	const storage::SessionSnapshot& now(); // the same snapshot for every page drawn in a frame
@@ -20,10 +21,17 @@ namespace fenrir::app {
 	void open_image();                     // the image dialog, then a scan of what was picked
 	void open_argument(int argc, char** argv); // a scan of the image on the command line, if there is one: "open with"
 
+	// making an image: a copy of a disk image (a drive, later) into a new file with its map, on a thread of its own
+	storage::ImagingSession& imaging();
+	const storage::ImagingSnapshot& imaging_now(); // the same snapshot for every page drawn in a frame
+	inline std::optional<std::filesystem::path> imaging_source, imaging_target; // picked for the next copy
+	void pick_imaging_source();
+	void pick_imaging_target();
+
 	// native file dialogs, each on a thread of its own so the window keeps drawing while one is open. the window is
 	// disabled under it, like under any modal dialog. take() hands what was picked over once, to whoever asked
 	namespace dialogs {
-		enum class e_kind { image, folder };
+		enum class e_kind { image, folder, new_image };
 		bool available();  // false where there's no dialog yet: the glfw build
 		bool showing();
 		void show(e_kind kind, int key);
