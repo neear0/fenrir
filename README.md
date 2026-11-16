@@ -9,7 +9,7 @@ Two separate jobs:
 
 It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD "secure".
 
-## Status: P7, erasure simulated
+## Status: P8 in progress, erasing a USB drive
 
 | | |
 |---|---|
@@ -37,7 +37,8 @@ It doesn't promise 100% recovery, and it doesn't call a file overwrite on an SSD
 | Erasure on a simulated drive (HDD, SATA SSD, NVMe SSD, USB stick) with faults to order: failing partway, power loss (a firmware sanitize finishes at the next power on), firmware that lies, unreadable afterwards, swapped between approval and running | done, tested: every fault ends in the status it is, never in success |
 | Erasure of disposable test image files: overwritten, flushed, read back, with a JSON report | done, tested (changed since approval, open in another program, stopped partway) |
 | Erase in the window and `fenrir-cli erase plan / run` | done, the window tried by hand on a simulated drive |
-| Erasing real drives | not in this build: P8, after an independent review. No code here can write to a drive |
+| Erasing a USB drive (P8): an overwrite of every sector, flushed, read back. USB drives only; never the drive Windows is on, nor one holding fenrir, its temp folder, the current folder or the report's folder; its volumes taken offline first; checked again right before writing and once more on the open handle | written, in review. Compiled in only with `-DFENRIR_DRIVE_ERASE=ON` (off by default, and in CI): without it no code in the build can write to a drive. Not yet run on a real drive |
+| ATA secure erase / sanitize, NVMe sanitize on real drives | not planned for now: there's no spare SATA or NVMe drive to test on, so these stay on the simulated drive |
 
 ### The window
 
@@ -69,6 +70,8 @@ fenrir-cli erase plan sim:nvme-ssd --method nvme-sanitize-crypto   what erasing 
 fenrir-cli erase run sim:hdd --confirm "ERASE 000001" --report out   run it on a simulated drive, with a JSON report
 fenrir-cli erase run sim:nvme-ssd --method nvme-sanitize-block --fault lies --confirm "ERASE 000003"   reading back catches it
 fenrir-cli erase run test.img --confirm "ERASE test.img"   overwrite a disposable test image, then read it back
+fenrir-cli erase plan \\.\PhysicalDrive2        what erasing a drive would do, or every reason it's refused (any build)
+fenrir-cli erase run \\.\PhysicalDrive2 --confirm "ERASE 055030" --report D:\out   as administrator, FENRIR_DRIVE_ERASE build only
 ```
 
 A drive is opened for reading only and read as it is, while Windows keeps using it: a drive that's in use, or failing, is better imaged first and the image scanned. `image` and `recover` refuse a destination on the drive being read, and one whose drive can't be told (a network share counts as no drive).
@@ -147,12 +150,14 @@ cmake --build --preset release
 ctest --preset release
 ```
 
+**The drive eraser** (P8) is left out unless it's asked for by name: `cmake --preset vs2022 -DFENRIR_DRIVE_ERASE=ON`. A build without it can plan the erasure of a drive and show every reason one is refused, but has no code that could write to a drive. CI builds without it.
+
 What it builds, in `build/vs2022/<Debug|Release>/`:
 
 | target | output | what it is |
 |---|---|---|
 | `celos_ui` | `fenrir.exe` | the app (CelosUI's target, kept by name) |
-| `storage_cli` | `fenrir-cli.exe` | read-only debug and test commands |
+| `storage_cli` | `fenrir-cli.exe` | debug and test commands, imaging and erasure |
 | `storage_core` | `storage_core.lib` | the engine, no UI or graphics code in it |
 | `storage_tests` | `tests/.../storage_tests.exe` | doctest unit tests |
 | `make_fixtures` | `tests/.../fenrir-make-fixtures.exe` | writes the test disk images, run by CTest |
@@ -190,7 +195,7 @@ cmake/             fenrir's targets
 - Two places in the engine write, and `tests/check_no_write_apis.cmake` keeps it that way: the exporter (new files only) and the imager (a new image, or the one its map was made with, and the map itself). Neither ever writes over a file it didn't make.
 - What wasn't read is never taken for zeros: an image's map goes with it everywhere it's read.
 - Drives are read through their own source (`storage::DiskSource`), opened for reading only; the image reader refuses device paths. The only things ever sent to a drive are three queries that change nothing (its description, its size, which drives a volume is on), and `no_write_apis` fails on any other.
-- Erasure only reaches simulated drives and test image files (overwritten through the imager's file layer, so `src/sanitation/` has no write api of its own). Real drives come last (P8), after an independent review. A method a target doesn't support is refused, never swapped for another; verified (it did what it should) is never called validated (it's enough for the data), which fenrir never decides.
+- Erasure reaches simulated drives, test image files (overwritten through the imager's file layer, so `src/sanitation/` has no write api of its own) and, only in a `FENRIR_DRIVE_ERASE` build, a USB drive. The one file that can write to a drive is `src/platform/windows/drive_erase.cpp`: `no_write_apis` lets it open a drive and its volumes for writing (twice), write (once) and lock and dismount volumes, and nothing else anywhere else. Its rules are checked again right before writing. It's an overwrite only: no ATA or NVMe command is ever sent to a drive. A method a target doesn't support is refused, never swapped for another; verified (it did what it should) is never called validated (it's enough for the data), which fenrir never decides.
 - No telemetry and no uploads.
 
 ## Known gaps
