@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 #include "block_source.h"
 
@@ -14,6 +15,10 @@ namespace storage {
 	// a path that reaches a device or a volume rather than a file: \\.\..., \\?\ other than \\?\C:\ and \\?\UNC\, \??\...
 	// on windows, /dev, /proc and /sys elsewhere
 	bool is_device_path(const std::filesystem::path& path) noexcept;
+
+	// when a file was last written, as the os counts it (a number only compared, never shown): nothing for a missing
+	// file. read-only, unlike std::filesystem's, which can set it too
+	std::optional<std::uint64_t> file_modified(const std::filesystem::path& path) noexcept;
 
 	class FileImageSource final : public IBlockSource {
 	public:

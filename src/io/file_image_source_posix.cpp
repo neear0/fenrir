@@ -94,3 +94,10 @@ bool storage::is_device_path(const std::filesystem::path& path) noexcept {
 	const std::string& p = path.native();
 	return p.starts_with("/dev/") || p.starts_with("/proc/") || p.starts_with("/sys/");
 }
+
+std::optional<std::uint64_t> storage::file_modified(const std::filesystem::path& path) noexcept {
+	struct stat info {};
+	if (::stat(path.c_str(), &info) != 0)
+		return std::nullopt;
+	return static_cast<std::uint64_t>(info.st_mtim.tv_sec) * 1000000000u + static_cast<std::uint64_t>(info.st_mtim.tv_nsec);
+}

@@ -131,3 +131,10 @@ storage::Result<std::size_t> storage::FileImageSource::read_at(std::uint64_t off
 bool storage::is_device_path(const std::filesystem::path& path) noexcept {
 	return device_path(path.native());
 }
+
+std::optional<std::uint64_t> storage::file_modified(const std::filesystem::path& path) noexcept {
+	WIN32_FILE_ATTRIBUTE_DATA data{};
+	if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
+		return std::nullopt;
+	return (std::uint64_t(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+}

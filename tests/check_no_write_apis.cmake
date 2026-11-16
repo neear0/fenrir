@@ -1,8 +1,8 @@
 # fails when the storage engine or the cli uses an api that can write to a file or a device. there are two reviewed write
 # paths: the exporter in src/export/, which may create new files and directories and remove the files it created, and
 # imaging in src/imaging/, which may create a new image file, write into it (or into one its map was made with), and
-# replace its own map whole. nothing else, not even there. erasure of disposable image files (P7) will get its own
-# entry here when it exists.
+# replace its own map whole. nothing else, not even there. erasing a disposable test image (P7, src/sanitation/) goes
+# through imaging's ImageFile::open_existing, so it has no write api of its own: nothing here lets it have one.
 # the ui (ui/, ImGui) isn't scanned: it never touches storage, it only talks to storage_core.
 # tools/ isn't either: the fixture generator writes test images, into the build directory ctest gives it.
 # a text search, so it also catches names in comments: say "writing" in prose, not the api.

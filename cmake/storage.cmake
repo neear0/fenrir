@@ -37,6 +37,7 @@ add_library(storage_core STATIC
     include/storage/disks.h
     include/storage/sanitize.h
     include/storage/simulated_drive.h
+    include/storage/image_erase.h
     src/core/error.cpp
     src/core/hash.cpp
     src/core/hex_dump.cpp
@@ -62,6 +63,7 @@ add_library(storage_core STATIC
     src/sanitation/policy.cpp
     src/sanitation/report.cpp
     src/sanitation/simulated.cpp
+    src/sanitation/image_erase.cpp
     src/imaging/image_file.h
     src/imaging/map.cpp
     src/imaging/acquire.cpp

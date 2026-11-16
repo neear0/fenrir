@@ -23,6 +23,7 @@ add_executable(storage_tests
     unit/test_disks.cpp
     unit/test_sanitize.cpp
     unit/test_simulated_drive.cpp
+    unit/test_image_erase.cpp
 )
 target_include_directories(storage_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_include_directories(storage_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools) # make_fixtures/fixtures.h
